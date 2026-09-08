@@ -1,0 +1,67 @@
+# SIH_Indian_AV
+#
+# NOTE ON output/: this file deliberately does NOT ignore any output folder.
+# The preserved prior work in existing_work/mathworks_scraper/output/ contains
+# reference material that must survive a git clone. Its own .gitignore excludes
+# that folder; this project-level file does not re-add such a rule.
+
+# --- Generated results -------------------------------------------------
+# Everything under results/ is produced by execution and is reproducible from
+# source. Committing results invites stale numbers being quoted long after the
+# code has changed.
+results/*
+!results/README.md
+
+# --- MATLAB generated / machine-specific -------------------------------
+*.asv
+*.autosave
+*.slxc
+*.mexw64
+*.mexa64
+*.mexmaci64
+slprj/
+sccprj/
+codegen/
+*.mat
+
+# MATLAB Project metadata is machine-generated; regenerate with createProject.m
+resources/
+
+# --- Simulink / Stateflow autosave -------------------------------------
+*.slx.autosave
+*.slx.r*
+*.mdl.autosave
+
+# --- RoadRunner scratch -------------------------------------------------
+*.rrproj.autosave
+RoadRunnerCache/
+
+# --- Python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# --- Editor / OS --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Secrets: never commit ---------------------------------------------
+*.lic
+license.dat
+*.pem
+*.key
+*.p12
+.env
+.env.*
+*credential*
+*secret*
