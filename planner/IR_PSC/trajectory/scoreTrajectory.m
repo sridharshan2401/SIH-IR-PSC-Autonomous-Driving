@@ -47,8 +47,9 @@ function [score, terms] = scoreTrajectory(traj, corridor, preds, cfg, vp)
 %
 %   See also CONFLICTRISK, IRPSCPLANNER, BASELINEPLANNER.
 
-w = struct('risk', 10.0, 'deviation', 1.0, 'curvature', 2.0, ...
-           'jerkiness', 1.5, 'progress', 3.0);
+w = struct('risk', cfg.score.wRisk, 'deviation', cfg.score.wDeviation, ...
+           'curvature', cfg.score.wCurvature, 'jerkiness', cfg.score.wJerkiness, ...
+           'progress', cfg.score.wProgress);   % weights: cfg.score (Phase 2)
 
 if ~isfield(traj,'valid') || ~traj.valid || size(traj.pos,1) < 2
     score = Inf;
@@ -86,6 +87,9 @@ end
 % the planning horizon at its configured maximum speed.
 idealDist = cfg.ego.maxSpeed * cfg.prediction.horizon;
 actual    = traj.s(end);
+if isfield(traj, 'stopS') && isfinite(traj.stopS)
+    actual = min(actual, traj.stopS);     % distance actually covered before stopping
+end
 rawProg   = max(0, 1 - actual / max(idealDist, eps));
 
 meanSpeed  = mean(traj.speed);

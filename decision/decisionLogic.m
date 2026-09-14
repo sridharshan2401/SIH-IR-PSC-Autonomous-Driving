@@ -52,6 +52,23 @@ function [action, dstate] = decisionLogic(plan, cfg, dstate)
 %        counter must never delay an emergency response. This is the one
 %        deliberate exception and it only ever escalates, never relaxes.
 %
+%   PHASE 2 CHANGES
+%   ---------------
+%     - EMERGENCY is judged on the PLANNED trajectory (plan.ttcPlanned), not
+%       on the do-nothing TTC. Previously a hazard the planner had already
+%       steered around, or a truck it was already following, still forced a
+%       safe stop. The do-nothing TTC (plan.ttc) still escalates to
+%       HAZARD_ASSESSMENT, so danger is never hidden by a successful dodge.
+%       Plans without a ttcPlanned field fall back to plan.ttc.
+%     - action.emergencyBrake distinguishes a controlled stop (service
+%       braking) from genuine emergency braking. It is true only when the
+%       planner reports that service braking is insufficient
+%       (plan.emergencyBrake) or the planned-path conflict is imminent.
+%     - Planner behaviour flags (following, yielding, stopping before a
+%       blocked passage, potholes, narrow passage, deformation) raise at
+%       least HAZARD_ASSESSMENT and give the operator a readable reason.
+%     - Speed-cap factors moved to cfg.decision.
+%
 %   Inputs:
 %       plan   - planner output struct from irpscPlanner() or baselinePlanner()
 %       cfg    - config struct from irpscConfig()
@@ -62,6 +79,7 @@ function [action, dstate] = decisionLogic(plan, cfg, dstate)
 %                .state        char, current state name
 %                .speedLimit   m/s cap to apply to the trajectory
 %                .useSafeStop  logical, command a safe stop
+%                .emergencyBrake logical, brake beyond service deceleration
 %                .reason       char, human-readable trigger, for demos/logs
 %                .stateChanged logical, true on the frame the state changed
 %       dstate - updated decision state, pass into the next call
@@ -97,23 +115,31 @@ prevState = dstate.state;
 % --- Gather the evidence ------------------------------------------------
 risk       = getOr(plan, 'risk', 0);
 conf       = getOr(plan, 'confidence', 1);
-ttc        = getOr(plan, 'ttc', Inf);
+ttc        = getOr(plan, 'ttc', Inf);                  % nominal, follows the road
+ttcPlan    = getOr(plan, 'ttcPlanned', ttc);           % along the planned trajectory
+planEmerg  = getOr(plan, 'emergencyBrake', false);
+beh        = getOr(plan, 'behaviour', struct());
 isSafeStop = getOr(plan, 'isSafeStop', false);
 feasible   = getOr(plan, 'feasible', true);
 clearOk    = getOr(plan, 'clearanceOk', true);
 status     = getOr(plan, 'status', 'ok');
 
 % --- Emergency: bypass all debounce -------------------------------------
-emergency = isSafeStop || ~feasible || ~clearOk || ...
-            risk >= d.riskStop || ttc <= cfg.risk.ttcCritical || ...
+emergency = isSafeStop || ~feasible || ~clearOk || planEmerg || ...
+            risk >= d.riskStop || ttcPlan <= cfg.risk.ttcCritical || ...
             any(strcmp(status, {'no_corridor','deformation_infeasible', ...
-                                'clearance_failed','no_feasible_candidate'}));
+                                'clearance_failed','feasibility_failed', ...
+                                'no_feasible_candidate'}));
 
 if emergency
-    reason = emergencyReason(status, risk, ttc, feasible, clearOk, d, cfg);
+    reason = emergencyReason(status, risk, ttcPlan, feasible, clearOk, d, cfg);
+    brakeHard = planEmerg || ttcPlan <= cfg.risk.ttcCritical;
+    if brakeHard
+        reason = ['EMERGENCY BRAKE: ' reason];
+    end
     dstate = enterState(dstate, 'SAFE_STOP');
     action = makeAction('SAFE_STOP', 0, true, reason, ...
-                        ~strcmp(prevState,'SAFE_STOP'));
+                        ~strcmp(prevState,'SAFE_STOP'), brakeHard);
     dstate.goodFrames = 0;
     dstate.history{end+1} = 'SAFE_STOP';
     return;
@@ -123,16 +149,22 @@ end
 if conf < d.confLow
     desired = 'CONSERVATIVE_DRIVING';
     reason  = sprintf('confidence %.2f below %.2f', conf, d.confLow);
-elseif risk >= d.riskAvoid
+elseif risk >= d.riskAvoid || (flagOf(beh, 'avoiding') && risk >= d.riskHazard)
     desired = 'PREDICTIVE_AVOIDANCE';
-    reason  = sprintf('risk %.2f at or above %.2f', risk, d.riskAvoid);
-elseif risk >= d.riskHazard || ttc <= cfg.risk.ttcWarning
+    if risk >= d.riskAvoid
+        reason = sprintf('risk %.2f at or above %.2f', risk, d.riskAvoid);
+    else
+        reason = sprintf('deforming around predicted hazard (risk %.2f)', risk);
+    end
+elseif risk >= d.riskHazard || ttc <= cfg.risk.ttcWarning || hazardFlag(beh)
     desired = 'HAZARD_ASSESSMENT';
     if risk >= d.riskHazard
         reason = sprintf('risk %.2f at or above %.2f', risk, d.riskHazard);
-    else
+    elseif ttc <= cfg.risk.ttcWarning
         reason = sprintf('time to conflict %.1f s at or below %.1f s', ...
                          ttc, cfg.risk.ttcWarning);
+    else
+        reason = getOr(beh, 'reason', 'planner hazard response');
     end
 elseif conf < d.confHigh
     desired = 'CONSERVATIVE_DRIVING';
@@ -146,7 +178,7 @@ end
 % After a stop or a conservative episode, require a sustained run of good
 % frames before normal driving is permitted again.
 conditionsGood = conf >= d.confHigh && risk < d.riskHazard && ...
-                 ttc > cfg.risk.ttcWarning;
+                 ttc > cfg.risk.ttcWarning && ~hazardFlag(beh);
 if conditionsGood
     dstate.goodFrames = dstate.goodFrames + 1;
 else
@@ -213,10 +245,10 @@ switch newState
         speedLimit  = cfg.ego.maxSpeed;
         useSafeStop = false;
     case 'HAZARD_ASSESSMENT'
-        speedLimit  = 0.75 * cfg.ego.maxSpeed;
+        speedLimit  = d.hazardSpeedFactor * cfg.ego.maxSpeed;
         useSafeStop = false;
     case 'PREDICTIVE_AVOIDANCE'
-        speedLimit  = 0.55 * cfg.ego.maxSpeed;
+        speedLimit  = d.avoidanceSpeedFactor * cfg.ego.maxSpeed;
         useSafeStop = false;
     case 'CONSERVATIVE_DRIVING'
         speedLimit  = min(d.conservativeSpeed, cfg.ego.maxSpeed);
@@ -225,7 +257,7 @@ switch newState
         speedLimit  = 0;
         useSafeStop = true;
     case 'RECOVERY'
-        speedLimit  = min(1.5 * d.conservativeSpeed, cfg.ego.maxSpeed);
+        speedLimit  = min(d.recoverySpeedFactor * d.conservativeSpeed, cfg.ego.maxSpeed);
         useSafeStop = false;
     otherwise
         speedLimit  = min(d.conservativeSpeed, cfg.ego.maxSpeed);
@@ -238,12 +270,33 @@ dstate.history{end+1} = newState;
 end
 
 % =====================================================================
-function a = makeAction(state, speedLimit, useSafeStop, reason, changed)
-a.state        = state;
-a.speedLimit   = speedLimit;
-a.useSafeStop  = useSafeStop;
-a.reason       = reason;
-a.stateChanged = changed;
+function a = makeAction(state, speedLimit, useSafeStop, reason, changed, emergencyBrake)
+if nargin < 6, emergencyBrake = false; end
+a.state          = state;
+a.speedLimit     = speedLimit;
+a.useSafeStop    = useSafeStop;
+a.reason         = reason;
+a.stateChanged   = changed;
+a.emergencyBrake = logical(emergencyBrake);
+end
+
+% =====================================================================
+function tf = flagOf(beh, name)
+tf = isstruct(beh) && isfield(beh, name) && ~isempty(beh.(name)) && logical(beh.(name));
+end
+
+% =====================================================================
+function tf = hazardFlag(beh)
+%HAZARDFLAG Planner is actively responding to something on the road.
+names = {'following','yielding','blockedAhead','potholeSlow','potholeAvoid', ...
+         'narrowPassage','avoiding'};
+tf = false;
+for i = 1:numel(names)
+    if flagOf(beh, names{i})
+        tf = true;
+        return;
+    end
+end
 end
 
 % =====================================================================

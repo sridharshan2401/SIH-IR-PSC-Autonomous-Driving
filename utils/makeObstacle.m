@@ -23,6 +23,9 @@ function obs = makeObstacle(id, class, pos, vel, varargin)
 %       'Confidence' - 0..1 detection/track confidence. Default 1.0
 %       'Age'        - integer frames the track has existed. Default 1
 %       'PosCov'     - 2x2 position covariance. Default 0.3^2 * eye(2)
+%       'TruthId'    - id of the ground-truth road user this record came
+%                      from, NaN if unknown (e.g. a false-positive track).
+%                      Used ONLY by evaluation metrics, never by the planner.
 %
 %   Outputs:
 %       obs - struct with the fields above plus .vulnerable and .agility
@@ -61,6 +64,7 @@ addParameter(p, 'Accel',      [0 0], @(x) isnumeric(x) && numel(x) == 2);
 addParameter(p, 'Confidence', 1.0,   @(x) isnumeric(x) && isscalar(x) && x >= 0 && x <= 1);
 addParameter(p, 'Age',        1,     @(x) isnumeric(x) && isscalar(x) && x >= 0);
 addParameter(p, 'PosCov',     0.3^2 * eye(2), @(x) isnumeric(x) && isequal(size(x), [2 2]));
+addParameter(p, 'TruthId',    NaN,   @(x) isnumeric(x) && isscalar(x));
 parse(p, varargin{:});
 r = p.Results;
 
@@ -91,4 +95,5 @@ obs.age        = r.Age;
 obs.posCov     = r.PosCov;
 obs.vulnerable = info(ci).vulnerable;
 obs.agility    = info(ci).agility;
+obs.truthId    = r.TruthId;
 end

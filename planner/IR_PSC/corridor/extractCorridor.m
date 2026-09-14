@@ -29,18 +29,43 @@ function corridor = extractCorridor(grid, ego, cfg, priorCenter)
 %        corridor never touches the exact edge of measured free space.
 %     5. Recompute the centreline as the midpoint of the eroded boundaries,
 %        then smooth it. This corrects the seed's greedy lateral bias.
-%     6. Blend with the previous frame's centreline for temporal stability.
+%     6. Blend with the previous frame's centreline for temporal stability,
+%        ALIGNED IN SPACE (see below).
+%     7. Classify every station as clear, NARROW or BLOCKED and truncate
+%        the usable corridor at the first blocked station.
 %
 %   Why step 5 matters: the seed hugs whichever side had more space. Taking
 %   the midpoint of the measured boundaries recentres the corridor, which is
 %   what makes the preferred trajectory road-following rather than
 %   free-space-hugging.
 %
+%   Temporal blending (Phase 2 fix)
+%   -------------------------------
+%   The vehicle moves between planning cycles, so station i of the previous
+%   centreline is NOT the same place as station i of the new one. The old
+%   code blended them index by index, dragging the corridor backwards and
+%   sideways on bends. Each new station is now blended towards the closest
+%   point of the previous centreline (a purely lateral correction), and only
+%   where the previous centreline actually covers that stretch of road.
+%
+%   Narrow and blocked stations (Phase 2 fix)
+%   -----------------------------------------
+%   Previously one station narrower than cfg.corridor.minWidth ANYWHERE in
+%   the lookahead made the whole corridor invalid, which triggered an
+%   emergency stop tens of metres before a pinch point. Now:
+%     - NARROW  : eroded width < cfg.corridor.minWidth. Passable slowly with
+%                 reduced side margins (see corridorBounds, irpscPlanner).
+%     - BLOCKED : measured free width < ego width + 2 * the hard minimum
+%                 clearance cfg.safety.minLateralClearance. The body cannot
+%                 fit. The corridor is truncated here (usableLength) and the
+%                 planner plans a controlled stop before it.
+%   The safety margins themselves are unchanged.
+%
 %   Inputs:
 %       grid        - occupancy grid struct from makeOccupancyGrid()
 %       ego         - ego state struct from makeEgoState()
 %       cfg         - config struct from irpscConfig()
-%       priorCenter - (optional) Nx2 centreline from the previous planning
+%       priorCenter - (optional) Mx2 centreline from the previous planning
 %                     cycle, used for temporal smoothing. Pass [] on the
 %                     first cycle.
 %
@@ -51,13 +76,18 @@ function corridor = extractCorridor(grid, ego, cfg, priorCenter)
 %           .right       Nx2 right boundary points
 %           .s           Nx1 arc length along the centreline
 %           .heading     Nx1 centreline heading (rad)
-%           .width       Nx1 corridor width at each station (m)
-%           .leftDist    Nx1 distance from centreline to left boundary
-%           .rightDist   Nx1 distance from centreline to right boundary
+%           .width       Nx1 eroded corridor width at each station (m)
+%           .rawWidth    Nx1 measured free width before erosion (m)
+%           .leftDist    Nx1 signed distance from centreline to left boundary
+%           .rightDist   Nx1 signed distance from centreline to right boundary
 %           .leftObserved  Nx1 logical, false where the ray found no edge
 %           .rightObserved Nx1 logical, same for the right side
+%           .narrow      Nx1 logical, passable only slowly
+%           .blocked     Nx1 logical, the vehicle body does not fit
+%           .usableLength scalar, arc length to the first blocked station
+%           .blockedIdx  index of the first blocked station ([] if none)
 %           .minWidth    scalar, narrowest point (m)
-%           .valid       logical, true if the corridor is usable
+%           .valid       logical, true if a usable corridor exists
 %           .quality     0..1 corridor confidence (see below)
 %           .length      scalar, corridor length in m
 %           .stalled     logical, from the seed march
@@ -79,7 +109,7 @@ function corridor = extractCorridor(grid, ego, cfg, priorCenter)
 %
 %   Requires: base MATLAB only.
 %
-%   See also SEEDCENTERLINE, EXTRACTCENTERLINE, IRPSCPLANNER, COMPUTECONFIDENCE.
+%   See also SEEDCENTERLINE, EXTRACTCENTERLINE, CORRIDORBOUNDS, IRPSCPLANNER.
 
 if nargin < 4, priorCenter = []; end
 
@@ -93,70 +123,93 @@ if size(seed,1) < 2
     return;
 end
 
-% --- 2. Uniform stations --------------------------------------------
+% --- 2. Uniform stations ----------------------------------------------
 sSeed  = pathArcLength(seed);
 nSta   = max(2, floor(sSeed(end) / c.stationStep) + 1);
 seedR  = resamplePath(seed, nSta);
 seedR  = smoothPath(seedR, 2, 1, true);       % light pre-smoothing
 thSeed = pathHeading(seedR);
 
-% --- 3. Cast boundary rays ------------------------------------------
 N          = size(seedR,1);
 leftPt     = zeros(N,2);
 rightPt    = zeros(N,2);
-leftD      = zeros(N,1);
-rightD     = zeros(N,1);
+rawWidth   = zeros(N,1);
 leftObs    = false(N,1);
 rightObs   = false(N,1);
 
+% --- 3-4. Perpendicular boundary rays, eroded ----------------------------
 for i = 1:N
     hL = thSeed(i) + pi/2;    % left normal
     hR = thSeed(i) - pi/2;    % right normal
 
-    [dL, pL] = rayCastGrid(grid, seedR(i,:), hL, c.maxRayLength, c.rayStep);
-    [dR, pR] = rayCastGrid(grid, seedR(i,:), hR, c.maxRayLength, c.rayStep);
+    [dL, ~] = rayCastGrid(grid, seedR(i,:), hL, c.maxRayLength, c.rayStep);
+    [dR, ~] = rayCastGrid(grid, seedR(i,:), hR, c.maxRayLength, c.rayStep);
 
-    % A ray that ran the full length found no edge: not an observation.
     leftObs(i)  = dL < c.maxRayLength - 1e-6;
     rightObs(i) = dR < c.maxRayLength - 1e-6;
+    rawWidth(i) = dL + dR;
 
-    % Erode inward so the corridor never sits exactly on measured free space.
     dLe = max(dL - c.boundaryErode, 0);
     dRe = max(dR - c.boundaryErode, 0);
 
-    leftD(i)  = dLe;
-    rightD(i) = dRe;
     leftPt(i,:)  = seedR(i,:) + dLe * [cos(hL), sin(hL)];
     rightPt(i,:) = seedR(i,:) + dRe * [cos(hR), sin(hR)];
 end
 
-% --- 4. Recentre and smooth -----------------------------------------
-center = extractCenterline(leftPt, rightPt, c.centerlineSmooth);
+% --- 5. Midpoint centreline ---------------------------------------------
+centerNow = extractCenterline(leftPt, rightPt, c.centerlineSmooth);
+centerNow(1,:) = 0.5 * (leftPt(1,:) + rightPt(1,:));
 
-% --- 5. Temporal blending -------------------------------------------
-% Corridor estimates jitter frame to frame because free space jitters.
-% Blending against the previous centreline keeps the preferred trajectory
-% stable without hiding a genuine change in the road.
+% --- 6. Spatially aligned temporal blending -------------------------------
+center = centerNow;
 if ~isempty(priorCenter) && size(priorCenter,1) >= 2 && cfg.ablation.useTemporalSmoothing
-    priorR = resamplePath(priorCenter, size(center,1));
-    a      = cfg.deform.temporalAlpha;      % 1 = ignore history
-    center = a * center + (1 - a) * priorR;
+    a  = cfg.deform.temporalAlpha;           % 1 = ignore history
+    sPrior = pathArcLength(priorCenter);
+    for i = 1:N
+        [sp, ~, ~, foot] = projectPointOnPath(priorCenter, centerNow(i,:));
+        % Only where the previous centreline genuinely covers this place;
+        % a projection clamped to either end is not the same stretch of road.
+        if sp > 1e-3 && sp < sPrior(end) - 1e-3
+            center(i,:) = a * centerNow(i,:) + (1 - a) * foot;
+        end
+    end
 end
 
-% --- 6. Geometry and quality ----------------------------------------
-center  = resamplePath(center, N);
-sCen    = pathArcLength(center);
-thCen   = pathHeading(center);
+center = resamplePath(center, N);
+sCen   = pathArcLength(center);
+thCen  = pathHeading(center);
 
-% Re-measure widths against the final centreline so .width is consistent
-% with .center rather than with the seed.
+% Signed distances along the centreline normal. If blending pushed a
+% station outside its own boundaries, fall back to the unblended midpoint.
 lDist = zeros(N,1);
 rDist = zeros(N,1);
 for i = 1:N
-    lDist(i) = norm(leftPt(i,:)  - center(i,:));
-    rDist(i) = norm(rightPt(i,:) - center(i,:));
+    nL = [-sin(thCen(i)), cos(thCen(i))];
+    lDist(i) = (leftPt(i,:)  - center(i,:)) * nL.';
+    rDist(i) = -(rightPt(i,:) - center(i,:)) * nL.';
+    if lDist(i) < 0.05 || rDist(i) < 0.05
+        center(i,:) = 0.5 * (leftPt(i,:) + rightPt(i,:));
+        lDist(i) = (leftPt(i,:)  - center(i,:)) * nL.';
+        rDist(i) = -(rightPt(i,:) - center(i,:)) * nL.';
+    end
 end
+lDist = max(lDist, 0);
+rDist = max(rDist, 0);
+sCen  = pathArcLength(center);
+thCen = pathHeading(center);
 width = lDist + rDist;
+
+% --- 7. Narrow / blocked classification ----------------------------------
+passWidth = cfg.ego.width + 2 * cfg.safety.minLateralClearance;
+blocked   = rawWidth < passWidth;
+narrow    = ~blocked & (width < c.minWidth);
+
+blockedIdx = find(blocked, 1, 'first');
+if isempty(blockedIdx)
+    usableLength = sCen(end);
+else
+    usableLength = sCen(blockedIdx);
+end
 
 corridor.center        = center;
 corridor.left          = leftPt;
@@ -164,10 +217,15 @@ corridor.right         = rightPt;
 corridor.s             = sCen;
 corridor.heading       = thCen;
 corridor.width         = width;
+corridor.rawWidth      = rawWidth;
 corridor.leftDist      = lDist;
 corridor.rightDist     = rDist;
 corridor.leftObserved  = leftObs;
 corridor.rightObserved = rightObs;
+corridor.narrow        = narrow;
+corridor.blocked       = blocked;
+corridor.usableLength  = usableLength;
+corridor.blockedIdx    = blockedIdx;
 corridor.minWidth      = min(width);
 corridor.length        = sCen(end);
 corridor.stalled       = seedInfo.stalled;
@@ -179,15 +237,12 @@ observedScore = mean([leftObs; rightObs]);
 corridor.quality = max(0, min(1, ...
     0.40 * lengthScore + 0.35 * widthScore + 0.25 * observedScore));
 
-corridor.valid = corridor.minWidth >= c.minWidth && ...
-                 corridor.length   >= 2 * c.stationStep;
+corridor.valid = usableLength >= c.minUsableLength && ...
+                 corridor.length >= 2 * c.stationStep;
 end
 
-% =====================================================================
+% -------------------------------------------------------------------------
 function corridor = emptyCorridor(ego, seedInfo)
-%EMPTYCORRIDOR Degenerate corridor for when no drivable space was found.
-%   Returned rather than throwing, so the planner can respond with a safe
-%   stop instead of the whole simulation aborting.
 p = ego.pos(:).';
 corridor.center        = [p; p];
 corridor.left          = [p; p];
@@ -195,13 +250,18 @@ corridor.right         = [p; p];
 corridor.s             = [0; 0];
 corridor.heading       = [ego.heading; ego.heading];
 corridor.width         = [0; 0];
+corridor.rawWidth      = [0; 0];
 corridor.leftDist      = [0; 0];
 corridor.rightDist     = [0; 0];
 corridor.leftObserved  = [false; false];
 corridor.rightObserved = [false; false];
+corridor.narrow        = [false; false];
+corridor.blocked       = [true; true];
+corridor.usableLength  = 0;
+corridor.blockedIdx    = 1;
 corridor.minWidth      = 0;
 corridor.length        = 0;
+corridor.stalled       = seedInfo.stalled;
 corridor.quality       = 0;
 corridor.valid         = false;
-corridor.stalled       = seedInfo.stalled;
 end

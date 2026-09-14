@@ -52,11 +52,12 @@ stepLen  = c.stationStep;
 nSteps   = max(1, ceil(c.lookaheadDist / stepLen));
 fanHalf  = c.seedHeadingFan;
 nFan     = max(3, c.seedFanCount);
-probeLen = min(c.lookaheadDist, 15.0);   % how far each candidate looks ahead
+probeLen = min(c.lookaheadDist, c.seedProbeLength);   % candidate look-ahead
 
 % Turn penalty in metres of "equivalent clearance" per radian of heading
-% change. Tuned so a 0.3 rad turn must buy about 1 m of extra clearance.
-turnPenalty = 3.0;
+% change. With the default 3.0, a 0.3 rad turn must buy about 1 m of extra
+% clearance. (Moved to cfg.corridor.seedTurnPenalty in Phase 2.)
+turnPenalty = c.seedTurnPenalty;
 
 seed        = zeros(nSteps + 1, 2);
 seed(1,:)   = ego.pos(:).';

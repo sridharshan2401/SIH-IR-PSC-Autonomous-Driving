@@ -50,21 +50,65 @@ if isempty(preds) || N == 0
     return;
 end
 
+% Phase 2: only samples the vehicle actually reaches, and only within the
+% prediction horizon. Evaluating a sample reached at t = 6 s against where
+% a road user is predicted to be at the 3.5 s horizon is not a prediction,
+% it is a guess that made every slow lead vehicle look like a certain
+% collision. Beyond-horizon samples are re-evaluated on later cycles.
+M = N;
+if isfield(traj, 'reachable') && numel(traj.reachable) == M
+    reach = logical(traj.reachable(:));
+else
+    reach = true(M,1);
+end
 th = traj.heading(:);
 t  = traj.times(:);
+use = reach & t <= cfg.prediction.horizon;
 
-sampleWorst = nan(N,1);
+pos = traj.pos(use,:);
+hdg = th(use);
+tq  = t(use);
 
+% A vehicle that comes to rest stays where it stopped: evaluate the resting
+% pose for the remainder of the horizon as well, so something moving INTO
+% the stopped vehicle is still scored.
+lastR = find(reach, 1, 'last');
+nRest = 0;
+if ~isempty(lastR) && traj.speed(lastR) <= 0.05 && t(lastR) < cfg.prediction.horizon
+    tRest = (t(lastR):cfg.prediction.dt:cfg.prediction.horizon).';
+    nRest = numel(tRest);
+    pos = [pos; repmat(traj.pos(lastR,:), nRest, 1)];
+    hdg = [hdg; repmat(th(lastR), nRest, 1)];
+    tq  = [tq; tRest];
+end
+
+if isempty(tq)
+    return;
+end
+
+Q = numel(tq);
+perQ   = zeros(Q,1);
+worstQ = nan(Q,1);
 for dIdx = 1:numel(vp.discOffsets)
     off = vp.discOffsets(dIdx);
-    discPos = [traj.pos(:,1) + off .* cos(th), ...
-               traj.pos(:,2) + off .* sin(th)];
+    discPos = [pos(:,1) + off .* cos(hdg), pos(:,2) + off .* sin(hdg)];
+    [r, wid] = predictedOccupancyRisk(discPos, tq, preds, vp.discRadius, cfg);
+    better = r > perQ;
+    perQ(better)   = r(better);
+    worstQ(better) = wid(better);
+end
 
-    [r, wid] = predictedOccupancyRisk(discPos, t, preds, vp.discRadius, cfg);
-
-    better = r > perSample;
-    perSample(better)   = r(better);
-    sampleWorst(better) = wid(better);
+idxUse = find(use);
+perSample(idxUse) = perQ(1:numel(idxUse));
+sampleWorst = nan(N,1);
+sampleWorst(idxUse) = worstQ(1:numel(idxUse));
+if nRest > 0
+    restRisk = max(perQ(numel(idxUse)+1:end));
+    if restRisk > perSample(lastR)
+        perSample(lastR) = restRisk;
+        [~, jr] = max(perQ(numel(idxUse)+1:end));
+        sampleWorst(lastR) = worstQ(numel(idxUse) + jr);
+    end
 end
 
 [totalRisk, iPeak] = max(perSample);

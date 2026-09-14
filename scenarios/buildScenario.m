@@ -37,6 +37,12 @@ function scn = buildScenario(name, seed)
 %     'cattle'       Sudden cattle crossing. An open road on which cattle
 %                    step out at a scripted moment, plus a following
 %                    motorcycle to make braking consequential.
+%     'demo'         PRIMARY JUDGE DEMONSTRATION (Phase 2). One continuous
+%                    road combining the behaviours above in sequence:
+%                    potholes to avoid, straddle and slow for, a slow
+%                    bicycle that must be followed until oncoming traffic
+%                    clears, a parked truck narrowing a market stretch,
+%                    cattle crossing, a pedestrian. See scenarioDemo.m.
 %
 %   Inputs:
 %       name - char, one of 'village','urban','highway','market','cattle'
@@ -60,6 +66,15 @@ function scn = buildScenario(name, seed)
 %           .seed       the seed used
 %           .description char, human-readable summary
 %           .sihScenario char, which official SIH scenario this covers
+%           .potholes   ground-truth pothole array (makePothole), may be empty
+%           .staticObjects struct array describing static objects for
+%                       display: .type .center .halfSize .radius .yaw
+%                       .height .inGrid
+%           .roadHalfWidth Kx1 road half-width along .centerline (NaN if
+%                       the scenario does not define one)
+%           .markings   struct .sFrom .sTo (m) where painted markings exist,
+%                       DISPLAY ONLY: the planner never uses them
+%           .environment 'rural' | 'urban' | 'highway' (display only)
 %
 %   Example:
 %       scn = buildScenario('village', 42);
@@ -84,11 +99,37 @@ switch name
         scn = scenarioMarket(res);
     case {'cattle','cattle_crossing'}
         scn = scenarioCattleCrossing(res);
+    case {'demo','main','judge'}
+        scn = scenarioDemo(res);
     otherwise
         error('buildScenario:unknownScenario', ...
-              ['Unknown scenario "%s". Use one of: village, urban, ' ...
+              ['Unknown scenario "%s". Use one of: demo, village, urban, ' ...
                'highway, market, cattle.'], name);
 end
 
 scn.seed = seed;
+scn = finaliseScenario(scn);
+end
+
+% =========================================================================
+function scn = finaliseScenario(scn)
+%FINALISESCENARIO Give every scenario the same optional fields (Phase 2).
+emptyPothole = struct('id',{},'pos',{},'length',{},'width',{},'yaw',{}, ...
+                      'depth',{},'severity',{},'riskLevel',{});
+if ~isfield(scn, 'potholes') || isempty(scn.potholes)
+    scn.potholes = emptyPothole;
+end
+if ~isfield(scn, 'staticObjects')
+    scn.staticObjects = struct('type',{},'center',{},'halfSize',{},'radius',{}, ...
+                               'yaw',{},'height',{},'inGrid',{});
+end
+if ~isfield(scn, 'roadHalfWidth')
+    scn.roadHalfWidth = nan(size(scn.centerline,1),1);
+end
+if ~isfield(scn, 'markings')
+    scn.markings = struct('sFrom', 0, 'sTo', 0);
+end
+if ~isfield(scn, 'environment')
+    scn.environment = 'rural';
+end
 end

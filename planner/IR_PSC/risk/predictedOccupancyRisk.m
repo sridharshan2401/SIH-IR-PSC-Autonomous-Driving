@@ -16,8 +16,8 @@ function [risk, worstId] = predictedOccupancyRisk(queryPos, queryTime, preds, eg
 %   on its predicted mean position and aligned with its predicted heading.
 %   The ellipse semi-axes are
 %
-%       a_long = egoRadius + obsRadius + n * sigmaLong
-%       a_lat  = egoRadius + obsRadius + n * sigmaLat
+%       a_long = egoRadius + obsHalfLength + n * sigmaLong
+%       a_lat  = egoRadius + obsHalfWidth  + n * sigmaLat
 %
 %   so the danger zone grows automatically when the prediction is uncertain.
 %   This is the mechanism by which uncertainty changes behaviour rather than
@@ -106,8 +106,17 @@ for k = 1:numel(preds)
     along =  dx .* ct + dy .* st;
     lat   = -dx .* st + dy .* ct;
 
-    aLong = egoRadius + p.radius + nSig * sL;
-    aLat  = egoRadius + p.radius + nSig * sT;
+    % Phase 2: the object's own extent is its half-length along its heading
+    % and its half-width across it. The earlier code used the enclosing
+    % radius hypot(L,W)/2 on BOTH axes, which made a 2.5 m wide bus look
+    % 11 m wide laterally and blocked adjacent lanes that are clear.
+    if isfield(p, 'halfLength') && ~isempty(p.halfLength)
+        hL = p.halfLength;  hW = p.halfWidth;
+    else
+        hL = p.radius;      hW = p.radius;
+    end
+    aLong = egoRadius + hL + nSig * sL;
+    aLat  = egoRadius + hW + nSig * sT;
     aLong = max(aLong, 1e-3);
     aLat  = max(aLat,  1e-3);
 

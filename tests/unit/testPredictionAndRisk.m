@@ -46,13 +46,19 @@ function testAgileClassSpreadsFasterLaterally(tc)
 % pedestrian must have far more lateral uncertainty than a bus.
 cfg = irpscConfig();
 t   = [0 1 2 3];
-bus = makeObstacle(1, 'bus',        [0 0], [8 0]);
+% Phase 2: both at the SAME speed. The original test gave the bus 8 m/s,
+% so the heading-uncertainty term (distance travelled x headingStd)
+% dominated and the test compared speed, not class. It had never been run.
+bus = makeObstacle(1, 'bus',        [0 0], [1 0]);
 ped = makeObstacle(2, 'pedestrian', [0 0], [1 0]);
 
 [~, sBus] = predictionUncertainty(bus, t, cfg);
 [~, sPed] = predictionUncertainty(ped, t, cfg);
 
-verifyGreaterThan(tc, sPed(end), sBus(end));
+% Compare at t = 2 s: by t = 3 s both reach the cfg.prediction.maxSigma cap
+% and are equal, which the original assertion at t(end) did not allow for.
+verifyGreaterThan(tc, sPed(3), sBus(3));
+verifyGreaterThanOrEqual(tc, sPed(end), sBus(end));
 end
 
 function testLowConfidenceInflatesUncertainty(tc)

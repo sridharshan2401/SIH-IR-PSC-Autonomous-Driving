@@ -48,7 +48,7 @@ N = size(corridor.center, 1);
 
 % --- Lateral offset samples ------------------------------------------
 maxShift = cfg.deform.maxLateralShift;
-step     = 0.25;                                   % m, offset resolution
+step     = cfg.risk.gridOffsetStep;              % m, offset resolution
 offsets  = -maxShift:step:maxShift;
 if isempty(offsets)
     offsets = 0;
@@ -62,6 +62,7 @@ vPlan        = max(ego.speed, 1.0);
 stationTimes = corridor.s(:) / vPlan;
 
 tHorizon = cfg.prediction.horizon;
+beyond   = stationTimes > tHorizon;
 stationTimes = min(stationTimes, tHorizon);   % clamp, never extrapolate
 
 % --- Evaluate ---------------------------------------------------------
@@ -72,22 +73,32 @@ if isempty(preds)
     return;
 end
 
-for j = 1:K
-    d = offsets(j);
-    P = frenetToCartesian(corridor.center, corridor.s, d);
+% All (station, offset, disc) query points are evaluated in ONE call to
+% predictedOccupancyRisk. This is numerically identical to looping over
+% offsets and discs (Phase 2 change, for speed only).
+sAll = repmat(corridor.s(:), K, 1);                    % (N*K)x1, offset blocks
+dAll = reshape(repmat(offsets, N, 1), [], 1);          % column-major: offset j block
+P    = frenetToCartesian(corridor.center, sAll, dAll); % (N*K)x2
+thAll = repmat(corridor.heading(:), K, 1);
+tAll  = repmat(stationTimes, K, 1);
 
-    % Vehicle heading at each station follows the corridor.
-    th = corridor.heading(:);
-
-    colRisk = zeros(N,1);
-    for dIdx = 1:numel(vp.discOffsets)
-        off = vp.discOffsets(dIdx);
-        discPos = [P(:,1) + off .* cos(th), P(:,2) + off .* sin(th)];
-        r = predictedOccupancyRisk(discPos, stationTimes, preds, vp.discRadius, cfg);
-        colRisk = max(colRisk, r);
-    end
-    R(:,j) = colRisk;
+nD = numel(vp.discOffsets);
+Q  = zeros(N*K*nD, 2);
+TQ = zeros(N*K*nD, 1);
+for dIdx = 1:nD
+    off = vp.discOffsets(dIdx);
+    rows = (dIdx-1)*N*K + (1:N*K);
+    Q(rows,:) = [P(:,1) + off .* cos(thAll), P(:,2) + off .* sin(thAll)];
+    TQ(rows)  = tAll;
 end
+r = predictedOccupancyRisk(Q, TQ, preds, vp.discRadius, cfg);
+r = reshape(r, N*K, nD);
+R = reshape(max(r, [], 2), N, K);
+
+% Stations reached after the prediction horizon are evaluated at the
+% horizon but down-weighted: the planner may start bending early, but a
+% guess about where a road user will be must not dominate (Phase 2).
+R(beyond, :) = cfg.risk.beyondHorizonWeight * R(beyond, :);
 
 R = applyBounds(R, offsets, dMin, dMax);
 end
@@ -96,10 +107,17 @@ end
 function R = applyBounds(R, offsets, dMin, dMax)
 %APPLYBOUNDS Mark offsets outside the drivable corridor as forbidden.
 %   Inf rather than a large finite penalty, so no weighting of the other
-%   cost terms can ever buy a path off the road.
+%   cost terms can ever buy a path off the road. If a narrow band contains
+%   no sampled offset at all, the single sampled offset nearest to the
+%   band centre stays allowed; the planner's clearance check still decides
+%   whether the body genuinely fits there.
 N = size(R,1);
 for i = 1:N
-    bad = offsets < dMin(i) | offsets > dMax(i);
+    bad = offsets < dMin(i) - 1e-9 | offsets > dMax(i) + 1e-9;
+    if all(bad)
+        [~, j] = min(abs(offsets - 0.5 * (dMin(i) + dMax(i))));
+        bad(j) = false;
+    end
     R(i, bad) = Inf;
 end
 end

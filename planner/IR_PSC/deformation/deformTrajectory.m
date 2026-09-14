@@ -1,4 +1,4 @@
-function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile)
+function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile, extraCost)
 %DEFORMTRAJECTORY Locally deform the preferred path around predicted hazards.
 %
 %   COMPONENT STATUS: REAL
@@ -15,7 +15,7 @@ function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile)
 %   -----------------------------------------------
 %   The cost of a whole offset profile d(1..N) is
 %
-%       J = sum_i [ wRisk * R(i, d_i) + wDev * d_i^2 ]
+%       J = sum_i [ wRisk * R(i, d_i) + wDev * d_i^2 + C(i, d_i) ]
 %         + sum_i wSmooth * (d_i - d_{i-1})^2
 %         + wAnchor * (d_1 - d0)^2
 %
@@ -32,6 +32,12 @@ function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile)
 %               and often infeasible for the steering system.
 %     wAnchor - start where the vehicle actually is. Without it the profile
 %               can begin with a step the controller cannot execute.
+%     C       - optional additional per-cell cost (Phase 2: pothole
+%               traversal cost from potholeCostGrid). Kept SEPARATE from the
+%               collision risk R so that reported collision risk is never
+%               inflated by road-surface hazards.
+%
+%   All weights live in cfg.deform (Phase 2; previously hard-coded here).
 %
 %   Forbidden cells (outside the corridor) arrive as Inf in R and are simply
 %   never selected. If an entire station is forbidden the problem is
@@ -44,9 +50,11 @@ function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile)
 %       cfg          - config struct from irpscConfig()
 %       d0           - scalar, ego's current lateral offset from the
 %                      corridor centre (m)
-%       priorProfile - (optional) Nx1 offset profile from the previous
-%                      planning cycle, for temporal smoothing. Pass [] on
-%                      the first cycle.
+%       priorProfile - (optional) Nx1 offset of the previous plan at each
+%                      CURRENT station, for temporal smoothing. NaN where
+%                      the previous plan does not cover the station. Pass []
+%                      on the first cycle.
+%       extraCost    - (optional) NxK non-negative additional cost.
 %
 %   Outputs:
 %       dProfile - Nx1 chosen lateral offset at each station (m)
@@ -69,6 +77,7 @@ function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile)
 %   See also LATERALRISKGRID, CORRIDORBOUNDS, GENERATETRAJECTORY.
 
 if nargin < 5, priorProfile = []; end
+if nargin < 6, extraCost    = []; end
 
 [N, K] = size(R);
 info = struct('feasible', true, 'cost', 0, 'maxRisk', 0, 'meanRisk', 0, ...
@@ -100,13 +109,16 @@ if isfield(cfg,'ablation') && ~cfg.ablation.useDeformation
 end
 
 % --- Cost weights ------------------------------------------------------
-wRisk   = 12.0 * cfg.deform.gain;
-wDev    = 0.35;
-wSmooth = 2.5;
-wAnchor = 4.0;
+wRisk   = cfg.deform.wRisk * cfg.deform.gain;
+wDev    = cfg.deform.wDev;
+wSmooth = cfg.deform.wSmooth;
+wAnchor = cfg.deform.wAnchor;
 
 % --- Stage costs -------------------------------------------------------
 stage = wRisk * R + wDev * repmat(offsets(:).'.^2, N, 1);
+if ~isempty(extraCost) && isequal(size(extraCost), [N K])
+    stage = stage + cfg.deform.wPothole * extraCost;
+end
 
 % Anchor the first station to where the vehicle actually is.
 stage(1,:) = stage(1,:) + wAnchor * (offsets - d0).^2;
@@ -115,9 +127,11 @@ stage(1,:) = stage(1,:) + wAnchor * (offsets - d0).^2;
 % does not flip between two equally good sides on successive frames.
 if ~isempty(priorProfile) && numel(priorProfile) == N && ...
         (~isfield(cfg,'ablation') || cfg.ablation.useTemporalSmoothing)
-    wTemporal = 1.5 * (1 - cfg.deform.temporalAlpha);
+    wTemporal = cfg.deform.wTemporal * (1 - cfg.deform.temporalAlpha);
     for i = 1:N
-        stage(i,:) = stage(i,:) + wTemporal * (offsets - priorProfile(i)).^2;
+        if isfinite(priorProfile(i))
+            stage(i,:) = stage(i,:) + wTemporal * (offsets - priorProfile(i)).^2;
+        end
     end
 end
 

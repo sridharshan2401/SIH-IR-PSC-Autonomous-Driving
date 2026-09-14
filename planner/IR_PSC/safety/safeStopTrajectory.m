@@ -1,4 +1,4 @@
-function traj = safeStopTrajectory(ego, corridor, cfg, emergency)
+function traj = safeStopTrajectory(ego, corridor, cfg, emergency, refPath)
 %SAFESTOPTRAJECTORY Controlled stop along the best available path.
 %
 %   COMPONENT STATUS: REAL
@@ -13,10 +13,15 @@ function traj = safeStopTrajectory(ego, corridor, cfg, emergency)
 %   finds no admissible path, when clearance or feasibility checks fail, or
 %   when the decision logic escalates to SAFE_STOP.
 %
-%   The stop follows the corridor centreline where one is available, so the
-%   vehicle decelerates along the road rather than braking in a straight
-%   line off a bend. Where no corridor exists it falls back to the current
-%   heading, which is the best available guess.
+%   The stop follows, in order of preference:
+%     1. refPath, normally the trajectory the vehicle was already following
+%        (Phase 2). Braking along the current plan keeps an avoidance
+%        manoeuvre in place instead of steering back into the hazard it was
+%        avoiding, which is what stopping along the centreline did.
+%     2. The corridor centreline at the vehicle's CURRENT lateral offset
+%        (previously offset 0, which put a kink into the stop path whenever
+%        the vehicle was not exactly centred).
+%     3. The current heading, where no corridor exists.
 %
 %   Deceleration is constant, giving the classic v^2 = v0^2 - 2*a*s profile.
 %   Constant deceleration is used rather than a smoother jerk-limited
@@ -34,6 +39,9 @@ function traj = safeStopTrajectory(ego, corridor, cfg, emergency)
 %       cfg       - config struct from irpscConfig()
 %       emergency - logical; true uses cfg.ego.emergencyDecel, false uses
 %                   cfg.ego.maxDecel. Default false.
+%       refPath   - (optional) Kx2 polyline to stop along, e.g. the previous
+%                   trajectory. Ignored if shorter than the stop distance
+%                   needs or if the vehicle is far from it.
 %
 %   Outputs:
 %       traj - trajectory struct in the same format as generateTrajectory(),
@@ -47,6 +55,7 @@ function traj = safeStopTrajectory(ego, corridor, cfg, emergency)
 %   See also GENERATETRAJECTORY, DECISIONLOGIC.
 
 if nargin < 4 || isempty(emergency), emergency = false; end
+if nargin < 5, refPath = []; end
 
 if emergency
     decel = cfg.ego.emergencyDecel;
@@ -61,13 +70,36 @@ stopDist = max(stopDist, 0.5);     % always emit a path of non-zero length
 M = cfg.traj.numPoints;
 
 % --- Geometry -----------------------------------------------------------
-useCorridor = ~isempty(corridor) && isfield(corridor,'center') && ...
+useRef = false;
+if ~isempty(refPath) && size(refPath,1) >= 2
+    [sE, dE] = projectPointOnPath(refPath, ego.pos);
+    sRef = pathArcLength(refPath);
+    useRef = abs(dE) < 1.0 && (sRef(end) - sE) >= min(stopDist, 2.0);
+end
+useCorridor = ~useRef && ~isempty(corridor) && isfield(corridor,'center') && ...
               size(corridor.center,1) >= 2 && corridor.length > 0.5;
 
-if useCorridor
-    sStop = linspace(0, min(stopDist, corridor.length), M).';
-    P     = frenetToCartesian(corridor.center, sStop, 0);
+if useRef
+    sAvail = sRef(end) - sE;
+    sStop  = sE + linspace(0, min(stopDist, sAvail), M).';
+    P      = frenetToCartesian(refPath, sStop, 0);
     P(1,:) = ego.pos(:).';
+    if sAvail < stopDist
+        % Extend straight along the end of the reference path.
+        extra = stopDist - sAvail;
+        hEnd  = pathHeading(refPath);
+        P = [P; P(end,:) + extra * [cos(hEnd(end)), sin(hEnd(end))]];
+    end
+elseif useCorridor
+    [sE, dE] = projectPointOnPath(corridor.center, ego.pos);
+    sAvail = max(corridor.length - sE, 0);
+    sStop  = sE + linspace(0, min(stopDist, sAvail), M).';
+    P      = frenetToCartesian(corridor.center, sStop, dE);
+    P(1,:) = ego.pos(:).';
+    if sAvail < stopDist
+        extra = stopDist - sAvail;
+        P = [P; P(end,:) + extra * [cos(corridor.heading(end)), sin(corridor.heading(end))]];
+    end
 else
     fwd = [cos(ego.heading), sin(ego.heading)];
     sStop = linspace(0, stopDist, M).';
@@ -105,6 +137,10 @@ traj.curvature  = k;
 traj.speed      = v;
 traj.s          = sArc;
 traj.times      = times;
+traj.reachable  = true(M,1);
+traj.stopS      = sArc(end);
+traj.ceiling    = zeros(M,1);
+traj.offsets    = zeros(M,1);
 traj.valid      = true;
 traj.isSafeStop = true;
 traj.emergency  = emergency;

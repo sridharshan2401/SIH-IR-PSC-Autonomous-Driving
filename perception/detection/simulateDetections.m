@@ -155,8 +155,12 @@ for i = 1:M
         vRadial = dot(groundTruth(i).vel(:).', losDir) + ...
                   sensor.velStd * randn(rngStream);
         velMeas = vRadial * losDir;
+        radialStd = sensor.velStd;
     else
         velMeas = [NaN NaN];
+        vRadial = NaN;
+        losDir  = [NaN NaN];
+        radialStd = NaN;
     end
 
     % Class: only sensors that classify report one, and they make mistakes.
@@ -169,7 +173,7 @@ for i = 1:M
     end
 
     d = makeDet(posMeas, velMeas, clsMeas, clsConf, sensor.name, ...
-                groundTruth(i).id, rMeas, posCov);
+                groundTruth(i).id, rMeas, posCov, vRadial, losDir, radialStd);
     dets(end+1) = d; %#ok<AGROW>
 end
 
@@ -182,13 +186,18 @@ for f = 1:nFalse
     posF  = sensorPos + rF * [cos(absAz), sin(absAz)];
 
     d = makeDet(posF, [NaN NaN], 'unknown', 0.35, sensor.name, NaN, rF, ...
-                eye(2) * (sensor.rangeStd + sensor.rangeStdRate*rF)^2);
+                eye(2) * (sensor.rangeStd + sensor.rangeStdRate*rF)^2, ...
+                NaN, [NaN NaN], NaN);
     dets(end+1) = d; %#ok<AGROW>
 end
 end
 
 % =====================================================================
-function d = makeDet(pos, vel, cls, conf, sensorName, truthId, range, posCov)
+function d = makeDet(pos, vel, cls, conf, sensorName, truthId, range, posCov, ...
+                     radialVel, losDir, radialStd)
+% .vel is kept for backward compatibility (radial speed times the line of
+% sight). The tracker uses .radialVel / .losDir / .radialStd, which is the
+% quantity radar genuinely measures (Phase 2).
 d.pos        = pos;
 d.vel        = vel;
 d.class      = cls;
@@ -197,12 +206,16 @@ d.sensor     = sensorName;
 d.truthId    = truthId;
 d.range      = range;
 d.posCov     = posCov;
+d.radialVel  = radialVel;
+d.losDir     = losDir;
+d.radialStd  = radialStd;
 end
 
 % =====================================================================
 function dets = emptyDetArray()
 dets = struct('pos',{},'vel',{},'class',{},'confidence',{}, ...
-              'sensor',{},'truthId',{},'range',{},'posCov',{});
+              'sensor',{},'truthId',{},'range',{},'posCov',{}, ...
+              'radialVel',{},'losDir',{},'radialStd',{});
 end
 
 % =====================================================================

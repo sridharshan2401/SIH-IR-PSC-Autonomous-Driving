@@ -43,22 +43,44 @@ function [ok, details] = checkFeasibility(traj, cfg, vp)
 %
 %   See also GENERATETRAJECTORY, CHECKCLEARANCE, PATHCURVATURE.
 
-k = traj.curvature(:);
-v = traj.speed(:);
-t = traj.times(:);
+% Only samples the vehicle actually reaches are checked. Geometry beyond a
+% planned stop point (traj.reachable == false) is never driven.
+if isfield(traj, 'reachable') && numel(traj.reachable) == numel(traj.speed)
+    use = logical(traj.reachable(:));
+else
+    use = true(numel(traj.speed), 1);
+end
+k = traj.curvature(use);
+v = traj.speed(use);
+t = traj.times(use);
+s = traj.s(use);
+k = k(:);  v = v(:);  t = t(:);  s = s(:);
 N = numel(v);
 
 details.violations = {};
 
 % --- 1. Curvature ------------------------------------------------------
-maxK   = max(abs(k));
+maxK   = max([abs(k); 0]);
 kLimit = min(vp.maxCurvature, cfg.safety.maxCurvature);
 curvatureOk = maxK <= kLimit + 1e-6;
 
 % --- 2. Lateral acceleration -------------------------------------------
-latAcc     = v.^2 .* abs(k);
-maxLat     = max(latAcc);
-latAccelOk = maxLat <= cfg.ego.maxLatAccel + 1e-6;
+% A sample only counts as a violation if a slower speed was physically
+% attainable there. If the vehicle is ALREADY too fast for the bend under
+% its nose, full braking cannot help at that sample; that is reported as
+% an unavoidable transient instead of silently passing or rejecting the
+% only plan that brakes as hard as possible.
+latAcc = v.^2 .* abs(k);
+maxLat = max([latAcc; 0]);
+if N >= 1
+    vFloor    = sqrt(max(v(1)^2 - 2 * cfg.ego.maxDecel * s, 0));
+    avoidable = v > vFloor + 0.3;     % a slower speed was attainable here
+else
+    avoidable = false(0,1);
+end
+over = latAcc > cfg.ego.maxLatAccel + 1e-6;
+latAccelOk = ~any(over & avoidable);
+details.unavoidableLatAccel = any(over & ~avoidable);
 
 % --- 3. Longitudinal acceleration --------------------------------------
 if N >= 2
@@ -74,8 +96,13 @@ accelOk = maxAcc <= cfg.ego.maxAccel + 1e-3 && ...
           maxDec <= cfg.ego.maxDecel + 1e-3;
 
 % --- 4. Jerk -----------------------------------------------------------
+% aLon(i) is the mean acceleration over [t(i), t(i+1)], centred at the
+% interval midpoint, so consecutive values are separated by the MIDPOINT
+% spacing. (The earlier code divided by t(i+1)-t(i), which is wrong for
+% non-uniform sample times.)
 if numel(aLon) >= 2
-    dt2 = diff(t(1:end-1));
+    tm  = 0.5 * (t(1:end-1) + t(2:end));
+    dt2 = diff(tm);
     dt2(dt2 <= 0) = eps;
     jerk = diff(aLon) ./ dt2;
 else

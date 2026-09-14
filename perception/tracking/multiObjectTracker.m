@@ -65,10 +65,10 @@ function [tracks, tstate] = multiObjectTracker(fusedDets, dt, cfg, tstate)
 %   See also FUSEDETECTIONS, MAKEOBSTACLE, PREDICTOBSTACLES.
 
 % --- Tuning -------------------------------------------------------------
-CONFIRM_HITS = 3;      % cycles seen before a track is trusted
-MAX_MISSES   = 5;      % cycles coasted before deletion
-GATE_CHI2    = 9.21;   % chi-square, 2 dof, 99% confidence
-SIGMA_ACCEL  = 2.5;    % m/s^2 process noise
+CONFIRM_HITS = cfg.tracking.confirmHits;   % cycles seen before a track is trusted
+MAX_MISSES   = cfg.tracking.maxMisses;     % cycles coasted before deletion
+GATE_CHI2    = cfg.tracking.gateChi2;      % chi-square, 2 dof
+SIGMA_ACCEL  = cfg.tracking.sigmaAccel;    % m/s^2 process noise
 
 if isempty(tstate) || ~isstruct(tstate)
     tstate.tracks = emptyTrackArray();
@@ -151,13 +151,27 @@ if ~isempty(pairs)
         % which the simpler (I-KH)P form does not always do.
         T(ti).P = Ijoseph * T(ti).P * Ijoseph.' + K * R * K.';
 
-        % Radar velocity, when present, corrects the velocity states
-        % directly with a light gain. A full velocity measurement model
-        % would be better; this is deliberately conservative.
-        if all(isfinite(fusedDets(di).vel))
-            alpha = 0.30;
-            T(ti).x(2) = (1-alpha)*T(ti).x(2) + alpha*fusedDets(di).vel(1);
-            T(ti).x(4) = (1-alpha)*T(ti).x(4) + alpha*fusedDets(di).vel(2);
+        % Radar Doppler: a proper Kalman update with the RADIAL velocity
+        % measurement z = lx*vx + ly*vy (H = [0 lx 0 ly]).
+        %
+        % Phase 2 fix: the previous code blended the velocity state 30 %
+        % per frame toward (radial speed x line of sight). Radar cannot
+        % observe the velocity component ACROSS its line of sight, so for
+        % anything crossing in front of the car -- cattle, pedestrians --
+        % that blend dragged the estimated velocity towards zero every
+        % frame and the prediction said the animal was standing still. The
+        % measurement model below corrects only the component radar
+        % actually measures; the crossing component comes from the
+        % position updates.
+        fd = fusedDets(di);
+        if isfield(fd, 'radialVel') && isfinite(fd.radialVel) && all(isfinite(fd.losDir))
+            Hv = [0, fd.losDir(1), 0, fd.losDir(2)];
+            Rv = max(fd.radialStd, 1e-3)^2;
+            Sv = Hv * T(ti).P * Hv.' + Rv;
+            Kv = T(ti).P * Hv.' / Sv;
+            T(ti).x = T(ti).x + Kv * (fd.radialVel - Hv * T(ti).x);
+            Iv = eye(4) - Kv * Hv;
+            T(ti).P = Iv * T(ti).P * Iv.' + Kv * Rv * Kv.';
         end
 
         T(ti).hits       = T(ti).hits + 1;
@@ -209,8 +223,10 @@ for j = 1:nD
     nt.id    = tstate.nextId;
     tstate.nextId = tstate.nextId + 1;
 
-    if all(isfinite(d.vel))
-        v0 = d.vel(:);
+    % Only the radial part of the velocity is known at birth; the rest
+    % stays at zero with the large initial variance below.
+    if isfield(d, 'radialVel') && isfinite(d.radialVel) && all(isfinite(d.losDir))
+        v0 = d.radialVel * d.losDir(:);
     else
         v0 = [0; 0];
     end
@@ -219,7 +235,7 @@ for j = 1:nD
     % Initial velocity covariance is large: one detection says nothing
     % about velocity, so claiming otherwise would make the first prediction
     % overconfident.
-    Pv = 25;
+    Pv = cfg.tracking.initVelVar;
     nt.P = blkdiag([d.posCov(1,1), 0; 0, Pv], [d.posCov(2,2), 0; 0, Pv]);
 
     nt.class      = d.class;
@@ -240,7 +256,7 @@ tstate.tracks = T;
 % =====================================================================
 tracks = struct('id',{},'class',{},'pos',{},'vel',{},'accel',{},'heading',{}, ...
                 'speed',{},'length',{},'width',{},'confidence',{},'age',{}, ...
-                'posCov',{},'vulnerable',{},'agility',{});
+                'posCov',{},'vulnerable',{},'agility',{},'truthId',{});
 
 for i = 1:numel(T)
     if ~T(i).confirmed
@@ -252,7 +268,8 @@ for i = 1:numel(T)
                      'Confidence', max(0, min(1, T(i).confidence)), ...
                      'Age',        T(i).age, ...
                      'PosCov',     [T(i).P(1,1), T(i).P(1,3); ...
-                                    T(i).P(3,1), T(i).P(3,3)]);
+                                    T(i).P(3,1), T(i).P(3,3)], ...
+                     'TruthId',    T(i).truthId);
     tracks(end+1) = o; %#ok<AGROW>
 end
 end

@@ -59,7 +59,8 @@ if nargin < 3, corridor = []; end
 if isempty(obstacles)
     preds = struct('id',{},'class',{},'times',{},'pos',{},'vel',{}, ...
                    'sigmaLong',{},'sigmaLat',{},'heading',{},'radius',{}, ...
-                   'weight',{},'confidence',{},'hypotheses',{});
+                   'weight',{},'confidence',{},'hypotheses',{}, ...
+                   'halfLength',{},'halfWidth',{},'truthId',{});
     return;
 end
 
@@ -70,7 +71,8 @@ M     = numel(obstacles);
 
 preds = repmat(struct('id',[],'class','','times',[],'pos',[],'vel',[], ...
                       'sigmaLong',[],'sigmaLat',[],'heading',[],'radius',[], ...
-                      'weight',[],'confidence',[],'hypotheses',[]), 1, M);
+                      'weight',[],'confidence',[],'hypotheses',[], ...
+                      'halfLength',[],'halfWidth',[],'truthId',[]), 1, M);
 
 usePred = ~isfield(cfg,'ablation') || cfg.ablation.usePrediction;
 
@@ -122,6 +124,13 @@ for m = 1:M
     preds(m).weight     = classRiskWeight(o.class, cfg);
     preds(m).confidence = o.confidence;
     preds(m).hypotheses = hyp;
+    preds(m).halfLength = o.length / 2;
+    preds(m).halfWidth  = o.width / 2;
+    if isfield(o, 'truthId')
+        preds(m).truthId = o.truthId;   % evaluation only
+    else
+        preds(m).truthId = NaN;
+    end
 end
 end
 

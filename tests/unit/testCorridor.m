@@ -144,6 +144,10 @@ end
 function testCorridorBoundsCollapseWhenTooNarrow(tc)
 % A road narrower than the vehicle plus margins must report zero room, not
 % a negative or fabricated allowance.
+% Phase 2: "zero room" is now a zero-WIDTH band (dMin == dMax) at the best
+% centred offset, rather than a band forced to contain d = 0 (which was
+% wrong whenever the centreline was not exactly centred). The corridor must
+% also be flagged blocked and invalid.
 g   = buildRoadGrid([0 0; 40 0], 0.8, 0.1);
 cfg = irpscConfig('urban');
 vp  = vehicleParams(cfg);
@@ -151,8 +155,22 @@ ego = makeEgoState([2 0], 0, 2.0);
 
 corr = extractCorridor(g, ego, cfg, []);
 [dMin, dMax] = corridorBounds(corr, vp.halfWidth, cfg.deform.boundaryMargin);
-verifyTrue(tc, all(dMax == 0));
-verifyTrue(tc, all(dMin == 0));
+verifyTrue(tc, all(dMax - dMin == 0));
+verifyTrue(tc, all(abs(dMin) < 0.2));
+verifyTrue(tc, all(corr.blocked));
+verifyFalse(tc, corr.valid);
+end
+
+function testNarrowButPassableGapIsNotBlocked(tc)
+% Phase 2: a gap wider than the body plus the hard minimum clearance is
+% NARROW (drive slowly) but not BLOCKED, and the corridor stays valid.
+cfg = irpscConfig('village');
+g   = buildRoadGrid([0 0; 60 0], 1.30, 0.1);        % 2.6 m free width
+ego = makeEgoState([2 0], 0, 3.0);
+corr = extractCorridor(g, ego, cfg, []);
+verifyTrue(tc, corr.valid);
+verifyFalse(tc, any(corr.blocked));
+verifyTrue(tc, any(corr.narrow));
 end
 
 function testExtractCenterlineIsMidpoint(tc)

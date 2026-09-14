@@ -103,12 +103,49 @@ verifyLessThan(tc, mean(vCurved), mean(vStraight));
 end
 
 function testSpeedProfileRespectsLateralAccelLimit(tc)
+% Phase 2: the profile now starts at the vehicle's ACTUAL speed (the old
+% profile silently set the first sample to the curve limit, i.e. assumed
+% the car could shed 16 m/s instantly). Starting below the curve limit, the
+% profile must never exceed the lateral-acceleration limit.
 cfg = irpscConfig();
 s = (0:1:30).';
 k = repmat(0.2, 31, 1);
-v = speedProfile(s, k, 20, 20, cfg, []);
+v = speedProfile(s, k, 20, 3.0, cfg, []);
 latAcc = v.^2 .* abs(k);
-verifyLessThanOrEqual(tc, max(latAcc), cfg.ego.maxLatAccel + 0.15);
+verifyLessThanOrEqual(tc, max(latAcc), cfg.ego.maxLatAccel + 1e-6);
+end
+
+function testSpeedProfileStartsAtCurrentSpeedAndBrakesLegally(tc)
+% Phase 2: entering the same bend too fast, the profile starts at the
+% current speed and sheds it no faster than the braking limit allows.
+cfg = irpscConfig();
+s = (0:1:30).';
+k = repmat(0.2, 31, 1);
+v = speedProfile(s, k, 20, 12.0, cfg, []);
+verifyEqual(tc, v(1), 12.0, 'AbsTol', 1e-9);
+dv2 = -diff(v.^2) ./ (2 * diff(s));          % deceleration per segment
+verifyLessThanOrEqual(tc, max(dv2), cfg.ego.maxDecel + 1e-6);
+verifyLessThan(tc, v(end), 4.0);
+end
+
+function testSpeedProfileRespectsJerkOnStraightRoad(tc)
+% Phase 2 regression: the old profile produced 17.7 m/s^3 jerk here and
+% every plan was rejected by checkFeasibility.
+cfg = irpscConfig('village');
+vp  = vehicleParams(cfg);
+s = linspace(0, 40, 41).';
+for v0 = [0 6 11]
+    v = speedProfile(s, zeros(41,1), cfg.ego.maxSpeed, v0, cfg, []);
+    t = zeros(41,1);
+    for i = 2:41
+        t(i) = t(i-1) + (s(i)-s(i-1)) / max(0.5*(v(i)+v(i-1)), 0.1);
+    end
+    traj = struct('pos', [s zeros(41,1)], 'heading', zeros(41,1), ...
+                  'curvature', zeros(41,1), 'speed', v, 's', s, 'times', t, ...
+                  'valid', true);
+    [ok, d] = checkFeasibility(traj, cfg, vp);
+    verifyTrue(tc, ok, sprintf('v0=%g: %s (jerk %.2f)', v0, strjoin(d.violations, ','), d.maxJerk));
+end
 end
 
 function testSpeedProfileSlowsForRisk(tc)

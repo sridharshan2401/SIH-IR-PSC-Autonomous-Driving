@@ -239,12 +239,17 @@ end
 function testPurePursuitSaturates(tc)
 cfg = irpscConfig();
 vp  = vehicleParams(cfg);
-traj.pos       = [0 0; 1 30];
-traj.heading   = [pi/2; pi/2];
-traj.curvature = [0; 0];
-traj.speed     = [5; 5];
-traj.s         = [0; 30];
-traj.times     = [0; 6];
+% Phase 2: a densely sampled path heading straight left of the vehicle.
+% The original two-point path put the pure-pursuit target 30 m away, which
+% needs only 0.16 rad of steering, so the test could never pass. It had
+% never been run.
+yy = (0:1:30).';
+traj.pos       = [zeros(31,1), yy];
+traj.heading   = repmat(pi/2, 31, 1);
+traj.curvature = zeros(31,1);
+traj.speed     = repmat(5, 31, 1);
+traj.s         = yy;
+traj.times     = yy / 5;
 traj.valid     = true;
 
 ego = makeEgoState([0 0], 0, 5.0);

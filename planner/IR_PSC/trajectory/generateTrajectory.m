@@ -1,9 +1,10 @@
-function traj = generateTrajectory(corridor, dProfile, ego, cfg, riskProfile)
+function traj = generateTrajectory(corridor, dProfile, ego, cfg, riskProfile, stationCeiling)
 %GENERATETRAJECTORY Build the final continuous trajectory from an offset profile.
 %
 %   COMPONENT STATUS: REAL
 %
-%   traj = GENERATETRAJECTORY(corridor, dProfile, ego, cfg, riskProfile)
+%   traj = GENERATETRAJECTORY(corridor, dProfile, ego, cfg)
+%   traj = GENERATETRAJECTORY(corridor, dProfile, ego, cfg, riskProfile, stationCeiling)
 %   converts the chosen lateral-offset profile into a world-frame,
 %   time-parameterised trajectory the controller can follow.
 %
@@ -21,14 +22,21 @@ function traj = generateTrajectory(corridor, dProfile, ego, cfg, riskProfile)
 %        is not.
 %     4. Resample to a fixed number of points and smooth the geometry.
 %     5. Compute heading and curvature.
-%     6. Assign a speed profile, then integrate it to get arrival times.
+%     6. Assign a JERK-LIMITED speed profile (speedProfile) that honours
+%        curvature, risk and any per-station speed ceiling (narrow passage,
+%        pothole, lead vehicle, stop point), then integrate arrival times.
+%     7. Mark which samples are actually REACHED. If the profile comes to
+%        rest before the end of the path, later samples are geometry only:
+%        they get time Inf and reachable = false, and no safety check or
+%        risk evaluation treats them as places the vehicle will be.
 %
 %   Inputs:
-%       corridor    - corridor struct from extractCorridor()
-%       dProfile    - Nx1 lateral offsets from deformTrajectory()
-%       ego         - ego state struct from makeEgoState()
-%       cfg         - config struct from irpscConfig()
-%       riskProfile - (optional) Nx1 risk per station, used for speed
+%       corridor       - corridor struct from extractCorridor()
+%       dProfile       - Nx1 lateral offsets from deformTrajectory()
+%       ego            - ego state struct from makeEgoState()
+%       cfg            - config struct from irpscConfig()
+%       riskProfile    - (optional) Nx1 risk per station, used for speed
+%       stationCeiling - (optional) Nx1 extra speed ceiling per station, m/s
 %
 %   Outputs:
 %       traj - struct with fields:
@@ -37,8 +45,13 @@ function traj = generateTrajectory(corridor, dProfile, ego, cfg, riskProfile)
 %           .curvature Mx1 signed curvature (1/m)
 %           .speed     Mx1 speed (m/s)
 %           .s         Mx1 arc length (m)
-%           .times     Mx1 arrival time from now (s)
+%           .times     Mx1 arrival time from now (s); Inf where not reached
+%           .reachable Mx1 logical, sample is reached before the vehicle stops
+%           .stopS     arc length where the vehicle comes to rest (Inf if not)
+%           .ceiling   Mx1 speed ceiling used (m/s)
+%           .offsets   Nx1 smoothed lateral offsets at the corridor stations
 %           .valid     logical
+%           .isSafeStop logical (false here)
 %
 %   Example:
 %       traj = generateTrajectory(corr, dProfile, ego, cfg, riskPerStation);
@@ -47,7 +60,8 @@ function traj = generateTrajectory(corridor, dProfile, ego, cfg, riskProfile)
 %
 %   See also DEFORMTRAJECTORY, SPEEDPROFILE, SCORETRAJECTORY.
 
-if nargin < 5, riskProfile = []; end
+if nargin < 5, riskProfile    = []; end
+if nargin < 6, stationCeiling = []; end
 
 N = size(corridor.center, 1);
 if N < 2 || ~corridor.valid
@@ -60,73 +74,94 @@ if numel(dProfile) ~= N
     dProfile = resampleSeries(dProfile, N);
 end
 
-% --- 1. Smooth the offset profile -------------------------------------
 if cfg.traj.smoothWindow > 0
     dSmooth = smoothSeries(dProfile, cfg.traj.smoothWindow, cfg.traj.smoothPasses);
 else
     dSmooth = dProfile;
 end
+% Smoothing must not undo the anchor: the vehicle is where it is.
+dSmooth(1) = dProfile(1);
 
-% --- 2. Back to world coordinates -------------------------------------
 P = frenetToCartesian(corridor.center, corridor.s, dSmooth);
-
-% --- 3. Anchor to the ego position ------------------------------------
 P(1,:) = ego.pos(:).';
 
-% --- 4. Resample and smooth geometry ----------------------------------
 M = cfg.traj.numPoints;
 P = resamplePath(P, M);
 P = smoothPath(P, cfg.traj.smoothWindow, cfg.traj.smoothPasses, true);
 
-% --- 5. Geometry -------------------------------------------------------
 sArc = pathArcLength(P);
 th   = pathHeading(P);
 k    = pathCurvature(P);
 
-% --- 6. Speed and timing ----------------------------------------------
+% Map per-station quantities onto trajectory samples by arc-length fraction.
+if sArc(end) > 1e-6 && corridor.s(end) > 1e-6
+    sEq = sArc / sArc(end) * corridor.s(end);
+else
+    sEq = zeros(M,1);
+end
 if isempty(riskProfile)
     riskM = zeros(M,1);
 else
-    riskM = resampleSeries(riskProfile(:), M);
+    riskM = interpStation(corridor.s, riskProfile(:), sEq);
+end
+if isempty(stationCeiling)
+    ceilM = inf(M,1);
+else
+    ceilM = interpStationMin(corridor.s, stationCeiling(:), sEq);
 end
 
-vTarget = cfg.ego.maxSpeed;
-v = speedProfile(sArc, k, vTarget, ego.speed, cfg, riskM);
+aNow = 0;
+if isfield(ego, 'accel') && isfinite(ego.accel)
+    aNow = ego.accel;
+end
+[v, pinfo] = speedProfile(sArc, k, cfg.ego.maxSpeed, ego.speed, cfg, riskM, ceilM, aNow);
 
-% Integrate ds / v to arrival times, guarding against division by zero when
-% the profile brings the vehicle to a stop.
 times = zeros(M,1);
+reachable = true(M,1);
 for i = 2:M
     ds    = sArc(i) - sArc(i-1);
-    vAvg  = max(0.5 * (v(i) + v(i-1)), 0.1);
-    times(i) = times(i-1) + ds / vAvg;
+    vAvg  = 0.5 * (v(i) + v(i-1));
+    if vAvg < 0.05 && v(i) <= 0 && sArc(i) > pinfo.stopS + 0.05
+        reachable(i:end) = false;
+        times(i:end)     = Inf;
+        break;
+    end
+    times(i) = times(i-1) + ds / max(vAvg, 0.1);
 end
 
-traj.pos       = P;
-traj.heading   = th;
-traj.curvature = k;
-traj.speed     = v;
-traj.s         = sArc;
-traj.times     = times;
-traj.valid     = true;
+traj.pos        = P;
+traj.heading    = th;
+traj.curvature  = k;
+traj.speed      = v;
+traj.s          = sArc;
+traj.times      = times;
+traj.reachable  = reachable;
+traj.stopS      = pinfo.stopS;
+traj.ceiling    = pinfo.ceiling;
+traj.offsets    = dSmooth;
+traj.valid      = true;
+traj.isSafeStop = false;
+traj.emergency  = false;
 end
 
-% =====================================================================
 function traj = emptyTraj(ego)
-%EMPTYTRAJ Degenerate single-point trajectory at the ego position.
 p = ego.pos(:).';
-traj.pos       = [p; p];
-traj.heading   = [ego.heading; ego.heading];
-traj.curvature = [0; 0];
-traj.speed     = [0; 0];
-traj.s         = [0; 0];
-traj.times     = [0; 0];
-traj.valid     = false;
+traj.pos        = [p; p];
+traj.heading    = [ego.heading; ego.heading];
+traj.curvature  = [0; 0];
+traj.speed      = [0; 0];
+traj.s          = [0; 0];
+traj.times      = [0; 0];
+traj.reachable  = [true; true];
+traj.stopS      = 0;
+traj.ceiling    = [0; 0];
+traj.offsets    = [0; 0];
+traj.valid      = false;
+traj.isSafeStop = false;
+traj.emergency  = false;
 end
 
-% =====================================================================
 function y = resampleSeries(x, n)
-%RESAMPLESERIES Linearly resample a series to n samples.
 x = x(:);
 m = numel(x);
 if m == n
@@ -135,5 +170,28 @@ elseif m < 2
     y = repmat(x(1), n, 1);
 else
     y = interp1(linspace(0,1,m).', x, linspace(0,1,n).', 'linear');
+end
+end
+
+function y = interpStation(sSta, x, sq)
+keep = [true; diff(sSta(:)) > 1e-9];
+if sum(keep) < 2
+    y = repmat(x(1), numel(sq), 1);
+    return;
+end
+y = interp1(sSta(keep), x(keep), min(max(sq, sSta(1)), sSta(end)), 'linear');
+end
+
+function y = interpStationMin(sSta, x, sq)
+% Speed ceilings must not be diluted by interpolation: take the tighter of
+% the two bracketing stations.
+sSta = sSta(:);
+N = numel(sSta);
+y = inf(numel(sq),1);
+for i = 1:numel(sq)
+    j = find(sSta <= sq(i), 1, 'last');
+    if isempty(j), j = 1; end
+    j2 = min(j+1, N);
+    y(i) = min(x(j), x(j2));
 end
 end

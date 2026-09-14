@@ -1,4 +1,4 @@
-function out = baselinePlanner(grid, ego, obstacles, cfg, state)
+function out = baselinePlanner(grid, ego, obstacles, cfg, state, roadHazards)
 %BASELINEPLANNER Fixed-candidate reactive planner, for comparison only.
 %
 %   COMPONENT STATUS: REAL (a faithful implementation of the approach it
@@ -9,6 +9,8 @@ function out = baselinePlanner(grid, ego, obstacles, cfg, state)
 %   offsets, each evaluated against CURRENT obstacle positions, pick the
 %   best. This is the approach IR-PSC is claimed to improve upon, so it
 %   exists here to make that claim measurable rather than rhetorical.
+%   out = BASELINEPLANNER(..., roadHazards) also receives confirmed pothole
+%   tracks, with the same interface as IRPSCPLANNER.
 %
 %   WHY THIS FILE MATTERS
 %   ---------------------
@@ -21,9 +23,10 @@ function out = baselinePlanner(grid, ego, obstacles, cfg, state)
 %
 %   THE THREE DIFFERENCES, WHICH ARE THE WHOLE POINT
 %   ------------------------------------------------
-%     1. FIXED CANDIDATES. Five discrete lateral offsets instead of a
-%        continuously deformable path. On a road whose usable width varies,
-%        the right offset is usually not one of the five.
+%     1. FIXED CANDIDATES. Five discrete lateral offsets
+%        (cfg.baseline.candidateOffsets) instead of a continuously
+%        deformable path. On a road whose usable width varies, the right
+%        offset is usually not one of the five.
 %
 %     2. NO PREDICTION. Obstacles are treated as static at their current
 %        positions. A pedestrian who will be in the road in 1.5 seconds is
@@ -40,6 +43,14 @@ function out = baselinePlanner(grid, ego, obstacles, cfg, state)
 %   needing lane markings. The comparison is therefore conservative -- it
 %   understates the full IR-PSC advantage rather than inflating it.
 %
+%   Phase 2: the baseline received the same infrastructure fixes as IR-PSC,
+%   so the comparison stays fair: the jerk-limited speed profile, narrow and
+%   blocked passage handling, following a road user in its lane (against
+%   FROZEN obstacles, consistent with "no prediction"), slowing for potholes
+%   its chosen candidate drives over, and a pothole term in its candidate
+%   score. It still has no pothole avoidance beyond picking among its five
+%   fixed offsets.
+%
 %   Inputs and Outputs match IRPSCPLANNER exactly, so the two are drop-in
 %   interchangeable in the simulation loop and in the metrics code.
 %   Additional output field:
@@ -52,15 +63,15 @@ function out = baselinePlanner(grid, ego, obstacles, cfg, state)
 %
 %   See also IRPSCPLANNER, SCORETRAJECTORY, RUNCOMPARISON.
 
-if nargin < 5, state = []; end
+if nargin < 5, state = []; end %#ok<NASGU>
+if nargin < 6, roadHazards = []; end
 
 vp     = vehicleParams(cfg);
 timing = struct();
 tAll   = tic;
 
-out            = struct();
-out.isSafeStop = false;
-out.status     = 'ok';
+out = plannerOutputTemplate();
+out.chosenOffset = 0;
 
 % --- Corridor (shared with IR-PSC, see note above) ---------------------
 t0 = tic;
@@ -75,18 +86,15 @@ cfgNoPred.ablation.useUncertainty = false;
 preds = predictObstacles(obstacles, cfgNoPred, corridor);
 timing.prediction = toc(t0);
 
-% --- No confidence awareness: always fully confident -------------------
-conf = 1.0;
-confBreak = struct('note', 'baseline planner does not model confidence');
-
-[ttc, ~, ttcDetails] = timeToConflict(ego, preds, cfg, vp);
-
+% --- No confidence model -------------------------------------------------
 out.corridor            = corridor;
 out.preds               = preds;
-out.confidence          = conf;
-out.confidenceBreakdown = confBreak;
-out.ttc                 = ttc;
-out.ttcLevel            = ttcDetails.level;
+out.confidence          = 1.0;
+out.confidenceBreakdown = struct('note', 'baseline planner does not model confidence');
+[out.ttc, ~, ttcDetails] = timeToConflict(ego, preds, cfg, vp, corridor);
+out.ttcLevel = ttcDetails.level;
+
+hz = confirmedPotholes(roadHazards);
 
 if ~corridor.valid
     out.status = 'no_corridor';
@@ -95,71 +103,104 @@ if ~corridor.valid
     return;
 end
 
-% --- Five fixed lateral candidates -------------------------------------
-% The classic structured-road candidate set: centre, plus two offsets each
-% side at roughly half a lane and a full lane.
-candidateOffsets = [-2.0, -1.0, 0.0, 1.0, 2.0];
+if isempty(corridor.blockedIdx)
+    lastUse = size(corridor.center,1);
+else
+    lastUse = max(corridor.blockedIdx - 1, 2);
+end
+corrUse = truncateCorridor(corridor, lastUse);
+out.preferredPath = corrUse.center;
+N = size(corrUse.center, 1);
 
-[dMin, dMax] = corridorBounds(corridor, vp.halfWidth, cfg.deform.boundaryMargin);
+% --- Shared speed ceilings (narrow / blocked) -----------------------------
+ceilBase = inf(N,1);
+ceilBase(corrUse.narrow) = cfg.corridor.narrowSpeed;
+if ~isempty(corridor.blockedIdx)
+    sStop = corridor.usableLength - vp.frontOverhang - cfg.corridor.stopStandoff;
+    ceilBase(corrUse.s >= sStop) = 0;
+end
+
+% --- Fixed candidate set --------------------------------------------------
+candidateOffsets = cfg.baseline.candidateOffsets;
+[dMin, dMax] = corridorBounds(corrUse, vp.halfWidth, cfg.deform.boundaryMargin, ...
+                              cfg.deform.minBoundaryMargin);
 
 t0 = tic;
-N = size(corridor.center,1);
 bestScore  = Inf;
 bestTraj   = [];
 bestOffset = 0;
-
+bestBeh    = out.behaviour;
 for c = 1:numel(candidateOffsets)
     d = candidateOffsets(c);
-
-    % Reject a candidate that leaves the corridor anywhere along its length.
-    if any(d < dMin) || any(d > dMax)
-        continue;
+    if any(d < dMin - 1e-9) || any(d > dMax + 1e-9)
+        continue;                     % would leave the corridor somewhere
     end
-
     dProfile = repmat(d, N, 1);
-    traj = generateTrajectory(corridor, dProfile, ego, cfg, zeros(N,1));
+
+    ceilSta = ceilBase;
+    beh = out.behaviour;
+    potholeCost = 0;
+    if ~isempty(hz)
+        hit = potholeWheelOverlap(corrUse, dProfile, hz, cfg, vp);
+        for p = 1:numel(hz)
+            rows = find(hit(:,1,p));
+            if isempty(rows), continue; end
+            zone = corrUse.s >= corrUse.s(rows(1)) - cfg.pothole.slowdownLead & ...
+                   corrUse.s <= corrUse.s(rows(end));
+            ceilSta(zone) = min(ceilSta(zone), cfg.pothole.speed.(hz(p).severity));
+            potholeCost = potholeCost + cfg.pothole.cost.(hz(p).severity);
+            beh.potholeSlow = true;
+        end
+    end
+    [leadCeil, leadInfo] = leadVehicleCeiling(corrUse, dProfile, preds, obstacles, ego, cfg, vp);
+    ceilSta = min(ceilSta, leadCeil);
+    beh.following = leadInfo.active;
+    beh.lead = leadInfo;
+
+    traj = generateTrajectory(corrUse, dProfile, ego, cfg, zeros(N,1), ceilSta);
     if ~traj.valid
         continue;
     end
-
-    % Reject on the same clearance and feasibility rules IR-PSC obeys.
-    clearOk = checkClearance(traj, grid, obstacles, cfg, vp);
+    % Frozen predictions make the time-aware check a current-position check,
+    % which is exactly what "no prediction" means.
+    clearOk = checkClearance(traj, grid, obstacles, cfg, vp, preds);
     feasOk  = checkFeasibility(traj, cfg, vp);
     if ~clearOk || ~feasOk
         continue;
     end
-
-    s = scoreTrajectory(traj, corridor, preds, cfg, vp);
+    s = scoreTrajectory(traj, corrUse, preds, cfg, vp) + cfg.score.wPothole * potholeCost;
     if s < bestScore
         bestScore  = s;
         bestTraj   = traj;
         bestOffset = d;
+        bestBeh    = beh;
     end
 end
 timing.candidates = toc(t0);
 
 if isempty(bestTraj)
-    % Every fixed candidate was rejected. This is the characteristic
-    % failure of a fixed-candidate planner on a narrow or irregular road:
-    % a perfectly drivable gap exists, but it does not happen to line up
-    % with one of the five offsets.
     out.status = 'no_feasible_candidate';
     out = baselineSafeStop(out, ego, corridor, cfg, vp, preds, obstacles, ...
                            grid, timing, tAll);
     return;
 end
 
-[clearOk, minClear] = checkClearance(bestTraj, grid, obstacles, cfg, vp);
-feasOk = checkFeasibility(bestTraj, cfg, vp);
-
+[clearOk, minClear] = checkClearance(bestTraj, grid, obstacles, cfg, vp, preds);
 out.traj         = bestTraj;
 out.chosenOffset = bestOffset;
 out.risk         = conflictRisk(bestTraj, preds, cfg, vp);
 out.score        = bestScore;
 out.clearanceOk  = clearOk;
 out.minClearance = minClear;
-out.feasible     = feasOk;
-out.state        = struct('center', corridor.center, 'profile', []);
+out.feasible     = checkFeasibility(bestTraj, cfg, vp);
+out.ttcPlanned   = timeToConflict(ego, preds, cfg, vp, bestTraj);
+out.emergencyBrake = out.ttcPlanned <= cfg.risk.ttcCritical;
+bestBeh.avoiding = abs(bestOffset) > 0.5;
+bestBeh.blockedAhead = ~isempty(corridor.blockedIdx);
+bestBeh.reason = sprintf('fixed candidate offset %+.1f m', bestOffset);
+out.behaviour    = bestBeh;
+out.state        = struct('center', corridor.center, 'profile', [], ...
+                          'trajPos', bestTraj.pos(bestTraj.reachable,:));
 
 timing.total = toc(tAll);
 out.timing   = timing;
@@ -168,20 +209,24 @@ end
 % =====================================================================
 function out = baselineSafeStop(out, ego, corridor, cfg, vp, preds, ...
                                 obstacles, grid, timing, tAll)
-%BASELINESAFESTOP Emergency stop fallback, matching the IR-PSC fallback.
+% The baseline has no graded response: any planning failure is a full stop.
 traj = safeStopTrajectory(ego, corridor, cfg, true);
 
 out.traj         = traj;
 out.isSafeStop   = true;
+out.emergencyBrake = true;
 out.chosenOffset = 0;
 out.risk         = conflictRisk(traj, preds, cfg, vp);
 out.score        = scoreTrajectory(traj, corridor, preds, cfg, vp);
-
-[clearOk, minClear] = checkClearance(traj, grid, obstacles, cfg, vp);
+[clearOk, minClear] = checkClearance(traj, grid, obstacles, cfg, vp, preds);
 out.clearanceOk  = clearOk;
 out.minClearance = minClear;
 out.feasible     = checkFeasibility(traj, cfg, vp);
-out.state        = struct('center', corridor.center, 'profile', []);
+out.ttcPlanned   = timeToConflict(ego, preds, cfg, vp, traj);
+beh = out.behaviour;
+beh.reason = sprintf('safe stop (%s)', strrep(out.status, '_', ' '));
+out.behaviour    = beh;
+out.state        = struct('center', corridor.center, 'profile', [], 'trajPos', traj.pos);
 
 timing.total = toc(tAll);
 out.timing   = timing;

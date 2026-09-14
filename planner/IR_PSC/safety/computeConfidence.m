@@ -73,8 +73,8 @@ if isempty(obstacles)
     % No road users detected. That is not evidence of good perception, but
     % it is also not evidence of bad perception. A neutral value is used
     % rather than 1.0, so an empty scene does not masquerade as certainty.
-    perceptionScore = 0.75;
-    trackScore      = 0.75;
+    perceptionScore = cfg.confidence.emptySceneScore;
+    trackScore      = cfg.confidence.emptySceneScore;
 else
     confs = zeros(1, numel(obstacles));
     ages  = zeros(1, numel(obstacles));
@@ -84,12 +84,12 @@ else
     end
     perceptionScore = mean(confs);
     % Track maturity saturates at about 10 frames.
-    trackScore = mean(min(ages / 10, 1));
+    trackScore = mean(min(ages / cfg.confidence.matureAge, 1));
 end
 
 % --- Prediction sharpness ----------------------------------------------
 if isempty(preds)
-    predictScore = 0.75;
+    predictScore = cfg.confidence.emptySceneScore;
 else
     endSigma = zeros(1, numel(preds));
     for i = 1:numel(preds)
@@ -105,7 +105,8 @@ else
 end
 
 % --- Combine ------------------------------------------------------------
-w = struct('corridor', 0.35, 'perception', 0.25, 'track', 0.20, 'predict', 0.20);
+w = struct('corridor', cfg.confidence.wCorridor, 'perception', cfg.confidence.wPerception, ...
+           'track', cfg.confidence.wTrack, 'predict', cfg.confidence.wPredict);  % cfg.confidence (Phase 2)
 
 conf = w.corridor   * corridorScore + ...
        w.perception * perceptionScore + ...

@@ -68,7 +68,8 @@ function fused = fuseDetections(detSets, cfg)
 % all(...) here would silently become an indexing operation on the struct
 % array instead of a logical reduction.
 allDets = struct('pos',{},'vel',{},'class',{},'confidence',{}, ...
-                 'sensor',{},'truthId',{},'range',{},'posCov',{});
+                 'sensor',{},'truthId',{},'range',{},'posCov',{}, ...
+                 'radialVel',{},'losDir',{},'radialStd',{});
 for s = 1:numel(detSets)
     ds = detSets{s};
     for i = 1:numel(ds)
@@ -77,7 +78,8 @@ for s = 1:numel(detSets)
 end
 
 fused = struct('pos',{},'vel',{},'class',{},'confidence',{}, ...
-               'posCov',{},'sensors',{},'nSensors',{},'truthId',{});
+               'posCov',{},'sensors',{},'nSensors',{},'truthId',{}, ...
+               'radialVel',{},'losDir',{},'radialStd',{});
 
 N = numel(allDets);
 if N == 0
@@ -86,7 +88,7 @@ end
 
 % --- Greedy grouping by gated proximity ---------------------------------
 used   = false(1,N);
-gateK  = 3.0;      % gate at 3 sigma of the combined uncertainty
+gateK  = cfg.fusion.gateSigma;   % gate, in std devs of the combined uncertainty
 
 for i = 1:N
     if used(i), continue; end
@@ -188,4 +190,17 @@ f.posCov     = Pf;
 f.sensors    = {dets.sensor};
 f.nSensors   = n;
 f.truthId    = truthId;
+
+% Radial (Doppler) velocity, passed through unchanged for the tracker's
+% proper measurement update. If several radar returns fused, the most
+% precise one is used.
+f.radialVel = NaN;  f.losDir = [NaN NaN];  f.radialStd = NaN;
+for k = 1:n
+    if isfield(dets(k), 'radialVel') && isfinite(dets(k).radialVel) && ...
+            (~isfinite(f.radialStd) || dets(k).radialStd < f.radialStd)
+        f.radialVel = dets(k).radialVel;
+        f.losDir    = dets(k).losDir;
+        f.radialStd = dets(k).radialStd;
+    end
+end
 end
