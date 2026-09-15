@@ -46,7 +46,7 @@ mode = lower(char(mode));
 
 unitSuites = {'testGeometry', 'testCorridor', 'testPredictionAndRisk', ...
               'testPlannerCore', 'testDecisionAndVehicle'};
-integSuites = {'testClosedLoop'};
+integSuites = {'testClosedLoop', 'testBehaviour'};   % testBehaviour added in Phase 2
 
 switch mode
     case 'unit'

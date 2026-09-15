@@ -93,7 +93,13 @@ staticMin  = Inf;
 dynamicMin = Inf;
 
 timeAware = ~isempty(preds) && numel(preds) == numel(obstacles);
-horizon   = cfg.prediction.horizon;
+% The HARD geometric check against predicted road users covers the near
+% term (cfg.safety.clearanceHorizon), where a mean prediction is reliable.
+% Beyond it the probabilistic risk model -- which carries the prediction's
+% uncertainty -- governs. Checking a noisy 3-4 s mean prediction as if it
+% were certain made the vehicle stop for oncoming traffic in its own lane
+% whenever a tracked heading wobbled by a few degrees (Phase 2).
+horizon   = min(cfg.prediction.horizon, cfg.safety.clearanceHorizon);
 searchR   = cfg.safety.clearanceSearch;
 
 for i = 1:M

@@ -6,11 +6,82 @@ Every command, what it does, and what to expect.
 
 ---
 
+## ⭐ The main demonstration (start here)
+
+```matlab
+cd <repository folder>
+setupPaths
+runDemo
+```
+
+That is the whole procedure. A window opens and the **live closed-loop simulation** runs on the primary demo road (`scenarios/demo/scenarioDemo.m`):
+
+| Where | What you see | Where it comes from |
+|---|---|---|
+| Left, 3D view | Road, houses, trees, parked truck, stalls, potholes (depressions), moving road users, the **ego car** | Scenario ground truth; ego pose from the **bicycle model** driven by the **controllers** |
+| Cyan ribbon + line | **The trajectory the car is following right now** (orange when following/yielding, red during a safe stop) | `irpscPlanner` output at this step |
+| Dashed white line | Preferred path (drivable-corridor centre with keep-left preference) | `plan.preferredPath` |
+| Red dashed line | A candidate the planner **rejected** (clearance/feasibility) | `plan.rejectedTraj` |
+| Green band | Drivable corridor found by ray-casting free space | `plan.corridor` |
+| Yellow → red cells | Predicted-occupancy **risk** the dynamic programme optimised over | `plan.riskGrid.R` |
+| Purple cells | **Pothole traversal cost** | `plan.riskGrid.potholeCost` |
+| Red ellipses | Predicted occupancy of road users at 1 / 2 / 3 s (1-σ) | `plan.preds` |
+| Yellow wire boxes + labels | **Tracked** objects (tracker output, may differ from truth) | `multiObjectTracker` |
+| Coloured dots | Raw camera / LiDAR / radar detections | `simulateDetections` |
+| Orange × and rings | Pothole detections, confirmed pothole tracks with severity and planned action | `detectPotholes`, `potholeTracker` |
+| Red wall | Planned stop point | trajectory speed reaches 0 |
+| Right panel | Speed, decision state, decision reason, planner behaviour, risk, confidence, TTC, tracks, potholes, event log | `decisionLogic`, planner |
+| Bottom | Speed, risk, confidence over the last 30 s | simulation log |
+
+Keyboard (click the figure first): **1** chase camera · **2** overview · **3** top-down · **space** pause/resume · **q** stop.
+
+### Options
+
+```matlab
+runDemo(struct('camera', 'overview'))                     % start in overview
+runDemo(struct('videoFile', 'results/irpsc_demo.mp4'))    % record (VideoWriter, base MATLAB)
+runDemo(struct('realTime', true))                         % pace display to simulated time
+runDemo(struct('scenario', 'village'))                    % any of the six scenarios
+runDemo(struct('planner', 'baseline'))                    % the conventional planner, same road
+runDemo(struct('usePerfectPerception', true))             % diagnostic: bypass simulated sensors
+[log, M] = runDemo(struct('visible', false));             % no window, just run
+```
+
+### Replay a recorded run
+
+```matlab
+[log, M] = runDemo(struct('visible', false));
+save('results/demo_run.mat', 'log', 'M');
+replayDemo('results/demo_run.mat')                                  % replay
+replayDemo('results/demo_run.mat', struct('fromTime', 40, 'camera', 'top'))
+replayDemo('results/demo_run.mat', struct('videoFile', 'results/replay.mp4'))
+```
+
+Replay shows exactly what was logged at each step; it does not re-plan.
+
+### Running without MATLAB (GNU Octave, for development checks)
+
+Octave is **not** the target platform, and results from it must be labelled as Octave results. It is useful for checking the code runs:
+
+```
+cd <repository folder>
+octave --no-gui
+>> addpath('tools/octave'); setupOctave
+>> r = runOctaveTests();                  % unit + integration + behaviour suites
+>> [log, M] = runScenario('demo', @irpscPlanner, [], struct('seed', 1));
+```
+
+`tools/octave` provides a seeded `RandStream` substitute and minimal `functiontests`/`verify*` shims. Random numbers differ from MATLAB's, so an Octave run is not numerically identical to a MATLAB run with the same seed. Octave has no `VideoWriter`; `runDemo` saves PNG frames instead. Octave is roughly an order of magnitude slower than real time on this project.
+
+---
+
 ## Quick reference
 
 | Command | What it does | Time |
 |---|---|---|
 | `setupPaths` | Adds source folders to the path | instant |
+| **`runDemo`** | **Main 3D live demonstration** | depends on machine |
+| `replayDemo(file)` | Replay a saved run in the 3D viewer | — |
 | `runAllTests('unit')` | Unit tests | ~1 min |
 | `runAllTests('all')` | Unit + integration | ~5 min |
 | `demoScenario('village')` | Animated single run | ~1 min |
@@ -56,7 +127,7 @@ runtests('testGeometry/testCurvatureOfCircle')
 [log, M] = runScenario('village', @irpscPlanner);
 ```
 
-Scenario names: `'village'` · `'urban'` · `'highway'` · `'market'` · `'cattle'`
+Scenario names: `'demo'` · `'village'` · `'urban'` · `'highway'` · `'market'` · `'cattle'` (or a scenario struct)
 
 Planners: `@irpscPlanner` · `@baselinePlanner`
 
@@ -253,6 +324,8 @@ log.confidence(k)
 | `clearance_failed` | Path produced, body would not fit | `cfg.safety` margins, vehicle width |
 | `feasibility_failed` | Path produced, vehicle cannot drive it | Curvature limits, speed profile |
 | `no_feasible_candidate` | Baseline only — none of its five offsets worked | **This is the fixed-candidate failure mode** |
+
+Since Phase 2 most hazards do **not** produce a failure status: the planner first deforms, slows, follows, yields, or stops before a blockage (see `plan.behaviour.reason`). A failure status means none of those produced a clear, feasible trajectory.
 
 ---
 

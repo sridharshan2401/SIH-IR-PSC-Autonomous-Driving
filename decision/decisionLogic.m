@@ -134,6 +134,14 @@ emergency = isSafeStop || ~feasible || ~clearOk || planEmerg || ...
 if emergency
     reason = emergencyReason(status, risk, ttcPlan, feasible, clearOk, d, cfg);
     brakeHard = planEmerg || ttcPlan <= cfg.risk.ttcCritical;
+    % Emergency BRAKING only means something while moving. A stopped
+    % vehicle with a road user approaching it stays in SAFE_STOP, but is
+    % not reported as braking hard.
+    trajNow = getOr(plan, 'traj', struct());
+    if isstruct(trajNow) && isfield(trajNow, 'speed') && ~isempty(trajNow.speed) && ...
+            trajNow.speed(1) < 0.3
+        brakeHard = false;
+    end
     if brakeHard
         reason = ['EMERGENCY BRAKE: ' reason];
     end

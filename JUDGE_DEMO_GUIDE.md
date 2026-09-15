@@ -16,6 +16,8 @@ Judges at this level have seen many teams overclaim. A team that says "we simula
 
 - [ ] `setupPaths` runs cleanly
 - [ ] `runAllTests('unit')` passes — **know your real numbers**
+- [ ] `runDemo` runs start to finish on the demo laptop (time it — MATLAB speed varies)
+- [ ] `runDemo(struct('videoFile','results/irpsc_demo.mp4'))` has produced a **backup video**
 - [ ] Each `demoScenario` runs without error
 - [ ] `runAllExperiments` has been run; you have real results
 - [ ] **A recorded video exists as backup.** Live demos fail.
@@ -36,10 +38,32 @@ Judges at this level have seen many teams overclaim. A team that says "we simula
 
 > "We inverted the hierarchy. Drivable space is the primary constraint; lane markings are an optional cue. There's no lane-detection step to fail — we measure free space directly, infer the boundaries from it, and follow the middle of whatever space actually exists. An unmarked village road isn't a degraded case for us. It's the ordinary case."
 
-### 3 · The village road (2 min)
+### 3 · The live 3D demonstration (3 min) — Phase 2
 
 ```matlab
-demoScenario('village')
+setupPaths
+runDemo
+```
+
+This is the primary demo: one road, every behaviour, planned live. Narrate the sequence as it happens (the HUD on the right names each behaviour as the planner produces it):
+
+1. **Marked approach, then markings end.** "The white lines are drawn for you. The planner never reads them — the label on the road says where they end, and nothing about the planning changes."
+2. **Moderate pothole ahead.** "Detected by the simulated camera and LiDAR, confirmed by the pothole tracker after three observations, severity estimated from depth. Purple cells are its cost in the planner. The cyan path bends around it and comes back."
+3. **Minor pothole narrower than the wheel track.** "Straddled — no reaction needed, which is what a good driver does."
+4. **Slow bicycle with an oncoming bus.** "No room to pass: the car follows at the bicycle's speed — orange trajectory — until the bus has gone, then overtakes."
+5. **Market stretch with a parked truck and a cart.** "The green corridor is measured free space; watch it shift right around the truck. The path follows the corridor."
+6. **Severe pothole, then a broken patch across the road.** "The severe one is avoided; the patch cannot be, so the car slows to the pothole speed cap and continues."
+7. **Cow walks into the road and stands.** "Predicted occupancy grows, the car yields with a controlled stop, and continues once the animal has moved on. Emergency braking is reserved for genuinely imminent conflicts."
+8. **Pedestrian crossing.** "Same mechanism."
+
+Press **2** for the overview camera and **3** for top-down when useful. **Space** pauses so you can point at the risk cells, the corridor and the trajectory.
+
+> Say plainly: "This is a schematic 3D view drawn with MATLAB graphics, not RoadRunner. Every object and line on screen is the simulation's state at this step."
+
+### 3b · The village road (2 min)
+
+```matlab
+runDemo(struct('scenario', 'village'))     % or the 2D view: demoScenario('village')
 ```
 
 Point at things as they happen:

@@ -549,7 +549,8 @@ function [ceilSta, list, beh] = applyPotholeCeilings(ceilSta, corr, dPath, dPref
 %   and classification of every confirmed pothole ahead:
 %     'slow'     - a tyre goes through it; speed capped to cfg.pothole.speed
 %     'avoid'    - the undeformed preferred path would hit it, the chosen does not
-%     'straddle' - neither path puts a tyre into it
+%     'straddle' - it lies between the wheel tracks of the chosen path
+%     'clear'    - it is ahead but away from both paths
 if isempty(hz)
     return;
 end
@@ -573,7 +574,14 @@ for p = 1:numel(hz)
         list(li).action = 'avoid';
         beh.potholeAvoid = true;
     elseif sp > 0 && sp < s(end)
-        list(li).action = 'straddle';
+        [~, dp] = projectPointOnPath(corr.center, hz(p).pos);
+        dAt = interp1(s, dPath(:), min(max(sp, s(1)), s(end)), 'linear');
+        halfAcross = max(hz(p).length, hz(p).width) / 2;
+        if abs(dp - dAt) + halfAcross < cfg.pothole.wheelTrack/2 - cfg.pothole.tyreWidth/2
+            list(li).action = 'straddle';
+        else
+            list(li).action = 'clear';
+        end
     end
 end
 end

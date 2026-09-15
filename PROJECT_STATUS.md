@@ -2,9 +2,92 @@
 
 **Project:** Adaptive Path Planning for Autonomous Vehicles on Unstructured Indian Roads (SIH)
 **Innovation:** IR-PSC — Indian-Road Predictive Safety Corridor
-**Status date:** 2026-09-07 (updated after pre-flight)
+**Status date:** 2026-09-15 (Phase 2) · branch `phase2-demo`
 
 ---
+
+## Phase 2 headline (2026-09-15)
+
+| | |
+|---|---|
+| **MATLAB execution** | ❌ **Still never executed in MATLAB** — MATLAB is not installed |
+| **GNU Octave 11.3.0 execution** | ✅ Whole pipeline, tests and demo executed and debugged in Octave (test-only shims in `tools/octave`) |
+| **Octave test suites** | ✅ **117 / 118 pass** (unit 94/95, closed-loop 12/12, behavioural 11/11). The one failure, `testFrenetRoundTrip`, is a pre-existing inconsistency (see Known issues) |
+| **Python tests** | ✅ 174 / 174 pass (`existing_work/mathworks_scraper`, Python 3.14.3) |
+| **Frenet cross-check** | ✅ 200 / 200 cases agree (CSV produced by `exportFrenetReference` executed in Octave; worst difference 3.6e-15 m) |
+| **Primary 3D demo (`runDemo`)** | ✅ `runDemo` itself executed end to end in Octave with the viewer updating inside the loop — goal reached, 0 collisions, identical metrics on repeat (numbers below) |
+| **Other five SIH scenarios** | ⚠️ Run without errors, but **do not yet reach their goals and four record contacts** (table below) |
+| **Simulink / Stateflow / RoadRunner** | ❌ Not available; no `.slx`, `.sfx`, `.rrscene` exists. SIH RoadRunner requirement **NOT MET** |
+
+> **Every number in this section was measured in GNU Octave, not MATLAB.** Octave random numbers differ from MATLAB's, so MATLAB runs with the same seed will not reproduce these numbers exactly. Re-run in MATLAB (`setupPaths; runAllTests('all'); runDemo`) before quoting any of them.
+
+### Primary demo — `scenarios/demo/scenarioDemo.m`, IR-PSC, seed 1, full simulated sensor chain (Octave)
+
+| Metric | Value |
+|---|---|
+| Goal reached | **yes**, at t = 76.9 s (limit 90 s) |
+| Collisions (static / dynamic contact steps) | **0** (0 / 0) |
+| Worst clearance to anything | 0.53 m |
+| Average speed | 4.04 m/s |
+| Safe-stop episodes | 9 — all at the cow standing in the road and the crossing pedestrian |
+| Emergency-braking steps | 0 |
+| Planner failure cycles | 8 |
+| Potholes | #1 moderate avoided · #2 minor passed without a wheel entry · #3 severe avoided · #4 wide moderate patch (unavoidable) crossed at 3.5–3.9 m/s (cap 4.0) |
+| Wall-clock time in Octave | 151 s for 76.9 s simulated |
+
+With perfect perception (diagnostic) an earlier build also reached the goal; the table above is the full-perception run of the final build.
+
+### All scenarios, seed 1 (Octave, full simulated perception)
+
+| Scenario | Planner | Goal | Collisions | Worst clearance | Avg speed | Longest stop | Notes |
+|---|---|---|---|---|---|---|---|
+| demo | IR-PSC | ✅ 76.9 s | 0 | 0.53 m | 4.04 m/s | — | primary demo |
+| demo | baseline | ❌ (90 s) | 2 | −0.53 m | 1.88 m/s | 59.3 s | fixed candidates |
+| village | IR-PSC | ❌ (45 s) | 1 | −0.12 m | 1.05 m/s | 27.8 s | |
+| urban | IR-PSC | ❌ (40 s) | 1 | −0.20 m | 1.84 m/s | 13.4 s | |
+| highway | IR-PSC | ❌ (45 s) | 0 | 2.00 m | 4.90 m/s | 0.1 s | slow behind trucks, no stall |
+| market | IR-PSC | ❌ (60 s) | 2 | −1.40 m | 0.21 m/s | 48.8 s | |
+| cattle | IR-PSC | ❌ (35 s) | 1 | −0.04 m | 3.92 m/s | 3.9 s | after fixing a follower spawn overlap (was 2 contacts) |
+
+**Contact diagnosis** (first frame of each contact, from the logs):
+
+| Scenario | Ego at contact | Other road user | Who moved into whom |
+|---|---|---|---|
+| village | stopped (SAFE_STOP) | oncoming motorcycle, 7.0 m/s | scripted actor into stationary ego |
+| urban | stopped (SAFE_STOP) | bus, 7.0 m/s | scripted actor into stationary ego |
+| market | 2.3 m/s | weaving motorcycle, 5.5 m/s | **ego into actor — a genuine planner failure** |
+| market | stopped (SAFE_STOP) | oncoming auto-rickshaw, 3.2 m/s | scripted actor into stationary ego |
+| cattle | stopped (SAFE_STOP) | oncoming truck, 10 m/s | scripted actor into stationary ego |
+| demo (baseline) | 1.4 m/s | bus, 8 m/s | both moving |
+| demo (baseline) | stopped | auto-rickshaw, 6 m/s | scripted actor into stationary ego |
+
+Most contacts are non-reactive scripted actors driving into a vehicle that has already stopped — a limitation of the actor model (they never yield) combined with the planner stopping in a place where an oncoming vehicle needs the space. The planner does not reason about *where* to wait; that is a real gap, not only a scenario artefact. The market contact at speed is a planner failure to be investigated.
+
+**These are honest negative results for five of the six scenarios.** Only the primary demo was tuned end to end in Phase 2. See *Contact diagnosis* below for who hit whom. A single seed is not a statistical result.
+
+### What was verified, and how
+
+- **Vehicle moves under its own control:** ego pose comes only from `bicycleModelStep` driven by `purePursuitControl` + `longitudinalControl` (behavioural tests `testVehicleMovesAndReachesGoalOnClearRoad`, `testPullsAwayFromStandstill`).
+- **Trajectory changes with the situation:** `testTrajectoryIsReplannedWhenHazardAppears`; demo log shows avoid / follow / yield / slow behaviours at the scripted events.
+- **Potholes detected, confirmed, classified, and handled:** `testPotholeDetectedConfirmedAndClassified`, `testSeverePotholeAvoidedWhenThereIsRoom`, `testUnavoidablePotholeCrossedSlowly`.
+- **Static obstacles cannot be driven through unnoticed:** `testRefereeDetectsDrivingIntoStaticObstacle`, `testAvoidsStaticObstacleWithoutContact`, `testStopsBeforeFullyBlockedRoad`.
+- **Visualisation matches simulation state:** off-screen snapshots of the recorded demo in chase, overview and top views were inspected against the log (Octave `qt` renderer).
+
+### Known issues (Phase 2)
+
+1. Never executed in MATLAB; MATLAB may raise errors Octave did not.
+2. Five of six scenarios do not complete; four record contacts (above). Next step: a "wait where the oncoming road user can pass" behaviour, and investigation of the market motorcycle contact.
+3. `testFrenetRoundTrip` fails: `frenetToCartesian` uses smoothed vertex normals and `projectPointOnPath` exact segment normals, so on a coarse, sharply bent 4-point polyline they are not exact inverses. On planner corridors (1 m stations, gentle curvature) the mismatch is centimetres. Pre-existing; left failing rather than weakened.
+4. Jerk is a reported comfort criterion, not a rejection reason (see `docs/PHASE2_CHANGES.md` §3).
+5. Scripted actors: only `Follower` actors react (gap keeping when behind the ego). No yielding, no negotiation.
+6. The drivable-space grid is ground truth handed to the planner; static obstacles are not sensed.
+7. No ride dynamics: potholes cannot jolt, damage or destabilise the vehicle; wheel entries are logged with speed.
+8. No detector exists for vehicles, animals or potholes; detections are statistical simulations of sensors.
+9. Octave runs about 2x slower than real time on the demo; MATLAB speed is unmeasured.
+
+---
+
+## Historical record: status on 2026-09-07 (before Phase 2)
 
 ## Headline
 

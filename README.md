@@ -10,9 +10,9 @@ Core innovation: **IR-PSC — Indian-Road Predictive Safety Corridor**
 
 ## ⚠️ Read this before anything else
 
-**No part of this project has ever been executed.** MATLAB, Simulink, Stateflow and RoadRunner were not installed on the machine where it was written. Every `.m` file was written against documented MATLAB semantics, but none has been parsed by MATLAB, let alone run.
+**This project has still never been run in MATLAB.** MATLAB, Simulink, Stateflow and RoadRunner are not installed on the development machine.
 
-**Expect errors on first run.** That is the unavoidable consequence of writing several thousand lines without an interpreter available, and it is stated here rather than left for a judge to discover.
+**Phase 2 (Sept 2026): the code has been executed and debugged in GNU Octave 11.3.0** (a free MATLAB-compatible interpreter), using the small test-only shims in `tools/octave`. The unit, integration and behavioural tests and the full demo scenario run there; the measured results are in [`PROJECT_STATUS.md`](PROJECT_STATUS.md) and every change is explained in [`docs/PHASE2_CHANGES.md`](docs/PHASE2_CHANGES.md). **Octave is not MATLAB** — report these as Octave results, and re-run in MATLAB before quoting anything.
 
 There are also things this package deliberately does **not** contain, because they cannot be created honestly without the software:
 
@@ -35,9 +35,11 @@ Full labelling of every component: [`docs/COMPONENT_REGISTER.md`](docs/COMPONENT
 ```matlab
 cd <this folder>
 setupPaths                    % adds all source folders to the path
-runAllTests('unit')           % expect failures; fix them; record the real numbers
-demoScenario('village')       % watch it drive an unmarked village road
+runDemo                       % the live 3D IR-PSC demonstration (primary demo)
+runAllTests('all')            % unit + integration + behavioural tests
 ```
+
+`runDemo` runs the full closed loop — simulated sensors, fusion, tracking, pothole detection, prediction, the IR-PSC planner, decision logic, controllers and vehicle model — and draws every step in a 3D view as it happens. See [`RUN_GUIDE.md`](RUN_GUIDE.md) for options (camera views, video recording, replay).
 
 Then, once the tests pass:
 
@@ -133,6 +135,7 @@ SIH_Indian_AV/
 
 | Scenario | Command | What it is built to test |
 |---|---|---|
+| **Primary demo** | `runDemo` | Every behaviour on one road: potholes (avoid / straddle / slow), following, market corridor shift, cattle, pedestrian |
 | A. Unmarked village road | `demoScenario('village')` | The central claim: **no lane markings exist at all** |
 | B. Unsignalized intersection | `demoScenario('urban')` | Prediction under occluded crossing traffic |
 | C. Highway merge | `demoScenario('highway')` | Early decisions at speed; shallow-angle merge |
@@ -163,7 +166,10 @@ SIH_Indian_AV/
 - Scenario actors are **scripted and do not react to the ego vehicle**. These scenarios cannot demonstrate negotiation or mutual yielding.
 - The tracker uses greedy association and can swap tracks in dense crowds.
 - Confidence is a designed heuristic, not a calibrated probability.
-- Potholes are modelled as planning obstacles, never as ride disturbances.
+- Potholes are detected (simulated sensors), tracked and planned around or crossed slowly; **ride response is not modelled** — the kinematic vehicle has no suspension.
+- The drivable-space grid is a ground-truth map given to the planner; static obstacles in it are not sensed.
+- Scripted actors only keep a gap when following the ego; they never yield or negotiate.
+- The 3D view is schematic MATLAB graphics, not RoadRunner or a game engine.
 
 ## Claims not made
 

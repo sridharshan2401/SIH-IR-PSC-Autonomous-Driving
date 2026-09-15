@@ -177,8 +177,13 @@ if ~isempty(pairs)
         T(ti).hits       = T(ti).hits + 1;
         T(ti).misses     = 0;
         T(ti).confidence = 0.7*T(ti).confidence + 0.3*fusedDets(di).confidence;
+        % Class by accumulated evidence, not the latest detection: camera
+        % class confusion otherwise made one track flip between car, truck
+        % and pushcart frame to frame (Phase 2).
         if ~strcmp(fusedDets(di).class, 'unknown')
-            T(ti).class = fusedDets(di).class;
+            T(ti).classVotes = addVote(T(ti).classVotes, fusedDets(di).class, ...
+                                       fusedDets(di).confidence);
+            T(ti).class = bestVote(T(ti).classVotes, T(ti).class);
         end
         T(ti).truthId = fusedDets(di).truthId;
 
@@ -245,6 +250,10 @@ for j = 1:nD
     nt.age        = 1;
     nt.confirmed  = false;
     nt.truthId    = d.truthId;
+    nt.classVotes = struct();
+    if ~strcmp(d.class, 'unknown')
+        nt.classVotes = addVote(nt.classVotes, d.class, d.confidence);
+    end
 
     T(end+1) = nt; %#ok<AGROW>
 end
@@ -277,5 +286,29 @@ end
 % =====================================================================
 function T = emptyTrackArray()
 T = struct('id',{},'x',{},'P',{},'class',{},'confidence',{}, ...
-           'hits',{},'misses',{},'age',{},'confirmed',{},'truthId',{});
+           'hits',{},'misses',{},'age',{},'confirmed',{},'truthId',{}, ...
+           'classVotes',{});
+end
+
+% =====================================================================
+function v = addVote(v, cls, w)
+if isfield(v, cls)
+    v.(cls) = v.(cls) + w;
+else
+    v.(cls) = w;
+end
+end
+
+function cls = bestVote(v, fallback)
+f = fieldnames(v);
+if isempty(f)
+    cls = fallback;
+    return;
+end
+best = -Inf;  cls = fallback;
+for i = 1:numel(f)
+    if v.(f{i}) > best
+        best = v.(f{i});  cls = f{i};
+    end
+end
 end

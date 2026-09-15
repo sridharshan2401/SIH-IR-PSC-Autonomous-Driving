@@ -70,6 +70,31 @@ if showGrid && isfield(scn,'grid')
                   'MarkerSize', 2);
 end
 
+% --- Static obstacles in the grid (Phase 2: previously invisible) ---------
+if isfield(scn, 'staticObjects')
+    for i = 1:numel(scn.staticObjects)
+        so = scn.staticObjects(i);
+        if ~so.inGrid, continue; end
+        if ~isempty(so.halfSize)
+            drawRect(ax, so.center, 2*so.halfSize(1), 2*so.halfSize(2), so.yaw, [0.35 0.30 0.25], 0.9);
+        else
+            tt = linspace(0, 2*pi, 20);
+            patch(ax, so.center(1) + so.radius*cos(tt), so.center(2) + so.radius*sin(tt), ...
+                  [0.35 0.30 0.25], 'EdgeColor', 'none');
+        end
+    end
+end
+if isfield(scn, 'potholes')
+    for i = 1:numel(scn.potholes)
+        ph = scn.potholes(i);
+        tt = linspace(0, 2*pi, 24);
+        E = [ph.length/2*cos(tt); ph.width/2*sin(tt)];
+        Rm = [cos(ph.yaw) -sin(ph.yaw); sin(ph.yaw) cos(ph.yaw)];
+        Pe = (Rm * E).';
+        patch(ax, Pe(:,1) + ph.pos(1), Pe(:,2) + ph.pos(2), [0.15 0.12 0.10], 'EdgeColor', [0.9 0.5 0.1]);
+    end
+end
+
 % --- Corridor ------------------------------------------------------------
 if showCorr && isfield(plan,'corridor') && plan.corridor.valid
     c = plan.corridor;
@@ -124,7 +149,15 @@ if isfield(plan,'traj') && isfield(plan.traj,'pos') && size(plan.traj.pos,1) >= 
 end
 
 % --- Ego vehicle ---------------------------------------------------------
-drawRect(ax, ego.pos, 4.0, 1.7, ego.heading, [0.10 0.35 0.10], 0.85);
+% Phase 2 fix: ego.pos is the REAR AXLE. The body rectangle is drawn at the
+% body centre (previously it was drawn 1.3 m behind the real vehicle).
+if isfield(opts, 'cfg') && ~isempty(opts.cfg)
+    vpDraw = vehicleParams(opts.cfg);
+else
+    vpDraw = vehicleParams(irpscConfig());
+end
+[~, egoCentre] = egoFootprint(ego.pos, ego.heading, vpDraw);
+drawRect(ax, egoCentre, vpDraw.length, vpDraw.width, ego.heading, [0.10 0.35 0.10], 0.85);
 
 % --- Annotation ----------------------------------------------------------
 if isfield(plan,'confidence')

@@ -166,6 +166,39 @@ The planner runs at a quarter rate because corridor extraction and the DP deform
 
 ---
 
+## 5a. Phase 2 additions to the loop
+
+```
+scenario actors move (road-following paths, ego-progress triggers, follower gap keeping)
+  -> camera / LiDAR / radar  ->  fusion  ->  tracking (radar Doppler as a proper KF update)
+  -> camera + LiDAR POTHOLE detection  ->  pothole landmark tracker (confirm, fuse, classify)
+  -> IR-PSC planner
+       corridor (narrow / blocked stations, spatially aligned temporal blending)
+       prediction (class-dependent heading uncertainty)
+       risk grid + POTHOLE wheel-track cost + STATIC clearance cost (distance field)
+       dynamic programme (speed-scaled smoothness, keep-left preference cue)
+       speed ceilings: narrow passage, pothole, lead road user, blockage, end of corridor
+       jerk-limited speed profile
+       time-aware clearance check  ->  yield (plan a stop before the conflict)
+       feasibility check           ->  retry at reduced speed
+       safe stop only if nothing above yields a clear, feasible trajectory
+  -> decision logic (emergency judged on the PLANNED trajectory; emergencyBrake flag)
+  -> pure pursuit + PI with feed-forward (emergency deceleration only when flagged)
+  -> kinematic bicycle
+  -> referee: exact rectangles vs road users AND the occupancy grid; pothole wheel entries
+  -> onStep callback -> live 3D viewer (visualization/viewer3d)
+```
+
+**Response cascade.** The planner answers a hazard with the least intrusive response that yields a clear and feasible trajectory: deform → slow → follow → yield → stop before a blockage → safe stop. Emergency braking (`cfg.ego.emergencyDecel`) is used only when the required deceleration exceeds service braking or the conflict on the planned trajectory is imminent (`ttcPlanned ≤ cfg.risk.ttcCritical`).
+
+**Following traffic.** Road users behind the ego travelling the same way are excluded from braking and stopping decisions (they stay in the lateral risk grid). Braking because a follower is predicted to reach you makes that conflict worse; see `isFollowingRoadUser.m`.
+
+**Potholes are not obstacles.** They never enter the occupancy grid. They add a wheel-track cost to the dynamic programme (a pothole between the wheels costs nothing) and a speed cap where a tyre will cross one. Their cost is kept separate from collision risk, so a pothole changes path and speed but never, by itself, triggers an emergency.
+
+**Visualisation is downstream only.** `runScenario` calls `opts.onStep(frame)` after every step. The viewer reads the frame; nothing flows back into the simulation.
+
+---
+
 ## 6. Simulink and Stateflow
 
 **No `.slx` or `.sfx` file exists in this package.** Both are binary artefacts only their tools can create, and neither tool was installed on the machine where this was written.

@@ -83,8 +83,10 @@ actors(end+1) = makeActor(2, 'animal', ...
 % Phase 2: road-following path, and a Follower -- it keeps a gap instead
 % of driving through the ego from behind (which the referee counted as the
 % planner's collision before the cattle had even appeared).
+% Starts 1.5 s after the ego so it is BEHIND it: at t = 0 the two bodies
+% overlapped, which the referee recorded as a contact at t = 0.2 s.
 actors(end+1) = makeActor(3, 'motorcycle', roadPath(centerline, 0, 160, 0.9), ...
-                          13.5, 'StartTime', 0, 'Follower', true);
+                          13.5, 'StartTime', 1.5, 'Follower', true);
 
 % Oncoming truck, so swerving right into the opposing side is not free either.
 actors(end+1) = makeActor(4, 'truck', roadPath(centerline, 160, 0, -2.0), ...

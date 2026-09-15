@@ -46,7 +46,8 @@ cfg.ego.emergencyDecel = 7.0;    % m/s^2, emergency braking magnitude
 cfg.ego.maxSteer       = 0.61;   % rad (~35 deg) road-wheel angle
 cfg.ego.maxSteerRate   = 0.50;   % rad/s
 cfg.ego.maxLatAccel    = 3.0;    % m/s^2, comfort limit
-cfg.ego.maxJerk        = 3.0;    % m/s^3
+cfg.ego.maxJerk        = 3.0;    % m/s^3, COMFORT jerk (profile shaping, reported)
+cfg.ego.brakeJerk      = 8.0;    % m/s^3, how fast brake force can physically build (assumption)
 
 % ---------------------------------------------------------------------
 % Corridor extraction. Drivable space is the PRIMARY planning constraint;
@@ -116,7 +117,9 @@ cfg.risk.ttcCritical     = 1.5;   % s, below this TTC counts as critical
 cfg.risk.ttcWarning      = 3.5;   % s, below this TTC counts as a warning
 cfg.risk.riskFloor       = 1e-4;  % ignore risk contributions below this
 cfg.risk.gridOffsetStep  = 0.15;  % m, lateral resolution of the risk grid (finer => less smoothing needed)
-cfg.risk.ttcSigmaFactor  = 0.5;   % std devs of predicted uncertainty added to TTC footprint
+cfg.risk.ttcSigmaFactor  = 0.25;  % std devs of predicted uncertainty added to TTC footprint
+                                  % (Phase 2 tuning: 0.5 made every oncoming vehicle passing ~1 m away
+                                  %  in its own lane an 'imminent conflict'; uncertainty is carried by the risk model)
 cfg.risk.speedReduction  = 0.75;  % fraction of target speed removed at risk = 1
 cfg.risk.beyondHorizonWeight = 0.3; % weight of risk at stations reached after the horizon
 
@@ -170,6 +173,7 @@ cfg.safety.timeGap             = 1.2;   % s, speed-dependent following gap
 cfg.safety.maxCurvature        = 0.25;  % 1/m, tightest allowed path curvature
 cfg.safety.minCorridorWidth    = 2.6;   % m, must exceed ego width + margins
 cfg.safety.clearanceSearch     = 3.0;   % m, grid search radius around the footprint
+cfg.safety.clearanceHorizon    = 2.0;   % s, hard geometric check vs predicted road users up to here
 cfg.safety.yieldStandoff       = 3.0;   % m, stop this far before a predicted conflict
 cfg.safety.leadDecel           = 2.5;   % m/s^2, planned decel when closing on a lead
 cfg.safety.emergencyMargin     = 1.0;   % factor on maxDecel above which braking is emergency
@@ -191,7 +195,7 @@ cfg.traj.profileDecel     = 3.0;   % m/s^2, planned braking (< ego.maxDecel)
 cfg.traj.profileGain      = 1.2;   % 1/s, speed-tracking gain of the generator
 cfg.traj.profileDt        = 0.05;  % s, generator integration step
 cfg.traj.profileMaxTime   = 30.0;  % s, generator time cap
-cfg.traj.ceilingWindow    = 4;     % stations, erosion/averaging window of the speed ceiling
+cfg.traj.ceilingWindow    = 2;     % stations, erosion/averaging window of the speed ceiling
 cfg.traj.profileLimitMargin = 0.97; % profile uses 97 % of accel/decel limits (sampling margin)
 cfg.traj.latAccelMargin   = 0.90;  % profile plans to 90 % of maxLatAccel (tracking margin)
 cfg.traj.feasibilityRetrySpeed = 0.6; % x maxSpeed: retry speed cap when a plan is infeasible

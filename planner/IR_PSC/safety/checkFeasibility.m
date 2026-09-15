@@ -85,7 +85,7 @@ curvatureOk = maxK <= kLimit + 1e-6;
 latAcc = v.^2 .* abs(k);
 maxLat = max([latAcc; 0]);
 if N >= 1
-    vFloor    = sqrt(max(v(1)^2 - 2 * cfg.ego.maxDecel * s, 0));
+    vFloor    = brakingFloor(v(1), s, cfg);
     avoidable = v > vFloor + 0.3;     % a slower speed was attainable here
 else
     avoidable = false(0,1);
@@ -155,4 +155,30 @@ if ~jerkOk,      details.comfortViolations{end+1} = 'jerk'; end
 if ~steerOk,     details.violations{end+1} = 'steeringAngle'; end
 
 ok = isempty(details.violations);
+end
+
+% -------------------------------------------------------------------------
+function vFloor = brakingFloor(v0, s, cfg)
+% Lowest speed physically attainable at each arc length when braking starts
+% now: deceleration builds at cfg.ego.brakeJerk up to cfg.ego.maxDecel.
+% (Assuming instantaneous full braking made the unavoidable-transient test
+% far too optimistic.)
+dt = 0.01;
+jB = cfg.ego.brakeJerk;
+aMax = cfg.ego.maxDecel;
+sq = 0;  v = v0;  a = 0;
+sH = 0;  vH = v0;
+while v > 0 && sq < s(end)
+    a = min(a + jB * dt, aMax);
+    vN = max(v - a * dt, 0);
+    sq = sq + 0.5 * (v + vN) * dt;
+    v = vN;
+    sH(end+1) = sq;  vH(end+1) = v; %#ok<AGROW>
+end
+vFloor = zeros(size(s));
+if numel(sH) >= 2
+    inside = s <= sH(end);
+    [sU, iU] = unique(sH);
+    vFloor(inside) = interp1(sU, vH(iU), s(inside), 'linear');
+end
 end

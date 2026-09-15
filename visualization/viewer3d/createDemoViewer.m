@@ -66,8 +66,10 @@ V.ax = axes('Parent', V.fig, 'Units', 'normalized', 'Position', [0.0 0.19 0.705 
             'Color', V.pal.sky, 'XColor', 'none', 'YColor', 'none', 'ZColor', 'none');
 hold(V.ax, 'on');
 axis(V.ax, 'equal');
-axis(V.ax, 'off');
-set(V.ax, 'Projection', 'perspective', 'CameraViewAngleMode', 'manual', ...
+% Keep the axes visible (so its sky-coloured background is drawn) but hide
+% ticks and rulers.
+set(V.ax, 'XTick', [], 'YTick', [], 'ZTick', [], 'Box', 'off', ...
+          'Projection', 'perspective', 'CameraViewAngleMode', 'manual', ...
           'CameraViewAngle', 38, 'Clipping', 'off');
 
 V.axMap = axes('Parent', V.fig, 'Units', 'normalized', 'Position', [0.715 0.68 0.28 0.31], ...
@@ -203,9 +205,8 @@ V.h.tsSpeed = plot(V.axTs, NaN, NaN, '-', 'Color', [0.2 0.9 1.0], 'LineWidth', 1
 V.h.tsRisk  = plot(V.axTs, NaN, NaN, '-', 'Color', [1.0 0.35 0.25], 'LineWidth', 1.5);
 V.h.tsConf  = plot(V.axTs, NaN, NaN, '-', 'Color', [0.5 1.0 0.5], 'LineWidth', 1.2);
 V.h.tsStop  = plot(V.axTs, NaN, NaN, 'LineStyle', 'none', 'Marker', '.', 'Color', [1 0 0], 'MarkerSize', 8);
-lg = legend(V.axTs, {'speed / max', 'risk', 'confidence', 'safe stop'}, 'Location', 'northwest', ...
-            'Orientation', 'horizontal');
-set(lg, 'TextColor', [0.9 0.9 0.9], 'Color', [0.1 0.11 0.13], 'FontSize', 7);
+title(V.axTs, 'speed / max speed (cyan)    risk (red)    confidence (green)    safe stop (red dots)', ...
+      'Color', [0.85 0.85 0.85], 'FontSize', 8, 'FontWeight', 'normal');
 
 % ---------------------------------------------------------------------
 % HUD
@@ -224,9 +225,21 @@ res = g.resolution;
 x0 = g.origin(1) - res/2;  x1 = g.origin(1) + (g.nCols - 0.5) * res;
 y0 = g.origin(2) - res/2;  y1 = g.origin(2) + (g.nRows - 0.5) * res;
 pad = 60;
-patch('Parent', V.ax, 'XData', [x0-pad x1+pad x1+pad x0-pad], ...
-      'YData', [y0-pad y0-pad y1+pad y1+pad], 'ZData', -0.06*[1 1 1 1], ...
-      'FaceColor', V.pal.terrain, 'EdgeColor', 'none', 'FaceLighting', 'none');
+% Terrain as a coarse tiled mesh (a single huge quad is not reliably
+% rendered with perspective projection).
+[TX, TY] = meshgrid(linspace(x0-pad, x1+pad, 24), linspace(y0-pad, y1+pad, 12));
+Vt = [TX(:), TY(:), -0.06*ones(numel(TX),1)];
+[nr, nc] = size(TX);
+Ft = zeros((nr-1)*(nc-1), 4);  q = 0;
+for c = 1:nc-1
+    for r = 1:nr-1
+        q = q + 1;
+        i1 = (c-1)*nr + r;
+        Ft(q,:) = [i1, i1 + nr, i1 + nr + 1, i1 + 1];
+    end
+end
+patch('Parent', V.ax, 'Vertices', Vt, 'Faces', Ft, 'FaceColor', V.pal.terrain, ...
+      'EdgeColor', 'none', 'FaceLighting', 'none');
 
 % Drivable surface: one quad per horizontal run of free cells.
 free = ~g.occ;
@@ -401,9 +414,9 @@ txt = @(x, y, s, sz, col, w) text(x, y, s, 'Parent', a, 'Units', 'data', 'FontSi
             'Color', col, 'FontWeight', w, 'VerticalAlignment', 'middle', 'Interpreter', 'none');
 V.hud.title   = txt(0.02, 0.975, 'IR-PSC  |  LIVE PLANNER OUTPUT', 11, [0.2 0.9 1], 'bold');
 V.hud.scen    = txt(0.02, 0.945, '', 8, [0.85 0.85 0.85], 'normal');
-V.hud.time    = txt(0.02, 0.915, '', 9, [0.85 0.85 0.85], 'normal');
-V.hud.speed   = txt(0.02, 0.87, '', 20, [1 1 1], 'bold');
-V.hud.limit   = txt(0.62, 0.87, '', 8, [0.8 0.8 0.8], 'normal');
+V.hud.time    = txt(0.02, 0.915, '', 8, [0.85 0.85 0.85], 'normal');
+V.hud.speed   = txt(0.02, 0.865, '', 20, [1 1 1], 'bold');
+V.hud.limit   = txt(0.50, 0.872, '', 7, [0.8 0.8 0.8], 'normal');
 V.hud.stateBox = rectangle('Parent', a, 'Position', [0.02 0.795 0.96 0.045], ...
                            'FaceColor', [0.2 0.6 0.2], 'EdgeColor', 'none');
 V.hud.state   = txt(0.04, 0.818, '', 12, [1 1 1], 'bold');

@@ -388,9 +388,9 @@ function V = updateHud(V, frame, plan, beh)
 h = V.hud;
 act = frame.action;
 set(h.scen, 'String', sprintf('%s   (seed %d)', V.scn.sihScenario, V.scn.seed));
-set(h.time, 'String', sprintf('t = %5.1f s    step %d    planner %s', frame.t, frame.k, getf(frame, 'plannerName', 'IR-PSC')));
+set(h.time, 'String', sprintf('t = %5.1f s   step %d   %s', frame.t, frame.k, getf(frame, 'plannerName', 'IR-PSC')));
 set(h.speed, 'String', sprintf('%4.1f km/h', 3.6 * frame.ego.speed));
-set(h.limit, 'String', sprintf('limit %3.0f km/h\nsteer %+5.1f deg\naccel %+4.1f m/s^2', ...
+set(h.limit, 'String', sprintf('limit %.0f km/h | steer %+.1f deg | a %+.1f m/s2', ...
     3.6 * act.speedLimit, rad2deg(frame.ego.steer), frame.accel));
 [col, label] = stateStyle(act.state);
 set(h.stateBox, 'FaceColor', col);
@@ -434,7 +434,8 @@ for i = 1:numel(pt)
     end
     dist = hypot(pt(i).pos(1) - frame.ego.pos(1), pt(i).pos(2) - frame.ego.pos(2));
     if dist > 60, continue; end
-    lines{end+1} = sprintf('#%d %-9s %-8s d=%4.1fcm %4.0fm %s', pt(i).id, pt(i).state, ...
+    if strcmp(act2, 'none'), act2 = ''; end
+    lines{end+1} = sprintf('#%d %-9s %-8s depth %4.1f cm  %3.0f m  %s', pt(i).id, pt(i).state, ...
         pt(i).severity, 100*pt(i).depth, dist, upper(act2)); %#ok<AGROW>
 end
 for i = 1:numel(h.pot)
