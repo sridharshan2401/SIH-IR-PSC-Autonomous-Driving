@@ -86,12 +86,22 @@ for k = 1:numel(obstacles)
     rel = o.heading - hc;
     halfAcross = abs(sin(rel)) * o.length/2 + abs(cos(rel)) * o.width/2;
     halfAlong  = abs(cos(rel)) * o.length/2 + abs(sin(rel)) * o.width/2;
-    band = vp.halfWidth + halfAcross + cfg.safety.lateralClearance;
+    vAlong = o.vel(:).' * [cos(hc); sin(hc)];
+    % Same-direction or stationary road users are followed if they are
+    % within the preferred side clearance. ONCOMING road users are only
+    % stopped for if the bodies would actually overlap within the HARD
+    % minimum clearance: passing oncoming traffic in its own lane is normal
+    % driving and is handled by the lateral deformation and the risk-based
+    % speed reduction, not by stopping in the road.
+    if vAlong < -0.5
+        band = vp.halfWidth + halfAcross + cfg.safety.minLateralClearance;
+    else
+        band = vp.halfWidth + halfAcross + cfg.safety.lateralClearance;
+    end
     if abs(dR - dPathAt) >= band
         continue;
     end
 
-    vAlong = o.vel(:).' * [cos(hc); sin(hc)];
     vLead  = max(vAlong, 0);
     gapNeed = cfg.safety.longitudinalGap + cfg.safety.timeGap * vLead;
     sGap = so - halfAlong - vp.frontOverhang - gapNeed;   % rear-axle station

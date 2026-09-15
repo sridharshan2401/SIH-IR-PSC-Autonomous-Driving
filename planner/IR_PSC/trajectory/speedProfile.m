@@ -85,7 +85,10 @@ jMax = min(tr.profileJerk, e.maxJerk);
 
 % ---- 1. ceiling ---------------------------------------------------------
 kAbs  = max(abs(curvature), 1e-6);
-vCurv = sqrt(e.maxLatAccel ./ kAbs);
+% The profile is planned against a fraction of the lateral-acceleration
+% limit: the jerk-limited generator tracks its ceiling with a small lag, and
+% the margin keeps that lag inside the limit checkFeasibility enforces.
+vCurv = sqrt(tr.latAccelMargin * e.maxLatAccel ./ kAbs);
 vRisk = vTarget * (1 - cfg.risk.speedReduction * min(max(riskProfile, 0), 1));
 ceilRaw = min([repmat(vTarget, N, 1), vCurv, vRisk, extraCeiling], [], 2);
 ceilRaw = max(ceilRaw, cfg.traj.minSpeed);

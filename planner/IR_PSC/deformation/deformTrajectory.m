@@ -26,7 +26,9 @@ function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile, 
 %
 %   Each term earns its place:
 %     wRisk   - avoid predicted hazards. The point of the exercise.
-%     wDev    - prefer the corridor centre. Without it, the path drifts to
+%     wDev    - prefer the preferred lateral position: the corridor centre,
+%               shifted by cfg.deform.preferredOffset where a traffic-side
+%               convention applies (Phase 2). Without it, the path drifts to
 %               whichever side is momentarily emptier and wanders.
 %     wSmooth - punish sharp lateral changes, which are both uncomfortable
 %               and often infeasible for the steering system.
@@ -54,7 +56,9 @@ function [dProfile, info] = deformTrajectory(R, offsets, cfg, d0, priorProfile, 
 %                      CURRENT station, for temporal smoothing. NaN where
 %                      the previous plan does not cover the station. Pass []
 %                      on the first cycle.
-%       extraCost    - (optional) NxK non-negative additional cost.
+%       extraCost    - (optional) NxK non-negative additional cost, already
+%                      weighted by the caller (pothole cost, static clearance
+%                      cost). Inf marks a forbidden cell.
 %
 %   Outputs:
 %       dProfile - Nx1 chosen lateral offset at each station (m)
@@ -84,7 +88,11 @@ info = struct('feasible', true, 'cost', 0, 'maxRisk', 0, 'meanRisk', 0, ...
               'maxShift', 0, 'blockedRows', []);
 
 % --- Infeasibility check ---------------------------------------------
-blocked = find(all(~isfinite(R), 2));
+if ~isempty(extraCost) && isequal(size(extraCost), [N K])
+    blocked = find(all(~isfinite(R) | ~isfinite(extraCost), 2));
+else
+    blocked = find(all(~isfinite(R), 2));
+end
 if ~isempty(blocked)
     info.feasible    = false;
     info.blockedRows = blocked(:).';
@@ -105,6 +113,7 @@ if isfield(cfg,'ablation') && ~cfg.ablation.useDeformation
     info.maxRisk  = max(r);
     info.meanRisk = mean(r);
     info.cost     = sum(r);
+    info.preferred = zeros(N,1);
     return;
 end
 
@@ -115,9 +124,20 @@ wSmooth = cfg.deform.wSmooth;
 wAnchor = cfg.deform.wAnchor;
 
 % --- Stage costs -------------------------------------------------------
-stage = wRisk * R + wDev * repmat(offsets(:).'.^2, N, 1);
+% Preferred offset per station: cfg.deform.preferredOffset clipped to the
+% admissible (finite) columns of that station.
+pref = zeros(N,1);
+if isfield(cfg.deform, 'preferredOffset') && cfg.deform.preferredOffset ~= 0
+    for i = 1:N
+        ok = isfinite(R(i,:));
+        if any(ok)
+            pref(i) = min(max(cfg.deform.preferredOffset, min(offsets(ok))), max(offsets(ok)));
+        end
+    end
+end
+stage = wRisk * R + wDev * (repmat(offsets(:).', N, 1) - repmat(pref, 1, K)).^2;
 if ~isempty(extraCost) && isequal(size(extraCost), [N K])
-    stage = stage + cfg.deform.wPothole * extraCost;
+    stage = stage + extraCost;      % already weighted by the caller; Inf = forbidden
 end
 
 % Anchor the first station to where the vehicle actually is.
@@ -182,4 +202,5 @@ info.cost     = totalCost;
 info.maxRisk  = max(chosenRisk);
 info.meanRisk = mean(chosenRisk);
 info.maxShift = max(abs(dProfile));
+info.preferred = pref;
 end

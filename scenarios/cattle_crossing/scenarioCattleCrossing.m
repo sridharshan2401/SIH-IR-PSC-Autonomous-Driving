@@ -80,13 +80,14 @@ actors(end+1) = makeActor(2, 'animal', ...
                           0.75, 'StartTime', 6.8);
 
 % Motorcycle following the ego closely: braking is not cost-free.
-actors(end+1) = makeActor(3, 'motorcycle', ...
-                          [centerline(1,:) + [-12, 0.9]; centerline(end,:) + [0, 0.9]], ...
-                          13.5, 'StartTime', 0);
+% Phase 2: road-following path, and a Follower -- it keeps a gap instead
+% of driving through the ego from behind (which the referee counted as the
+% planner's collision before the cattle had even appeared).
+actors(end+1) = makeActor(3, 'motorcycle', roadPath(centerline, 0, 160, 0.9), ...
+                          13.5, 'StartTime', 0, 'Follower', true);
 
 % Oncoming truck, so swerving right into the opposing side is not free either.
-actors(end+1) = makeActor(4, 'truck', ...
-                          [centerline(end,:) + [0 -2.0]; centerline(1,:) + [0 -2.0]], ...
+actors(end+1) = makeActor(4, 'truck', roadPath(centerline, 160, 0, -2.0), ...
                           10.0, 'StartTime', 0);
 
 % --- Assemble ------------------------------------------------------------
@@ -99,6 +100,9 @@ scn.goal        = centerline(end-2,:);
 scn.goalRadius  = 6.0;
 scn.actors      = actors;
 scn.duration    = 35.0;
+scn.roadHalfWidth = halfWidth;
+scn.extras      = extras;
+scn.extraTypes  = repmat({'bush'}, 1, numel(extras));
 scn.sihScenario = 'E: Sudden cattle crossing';
 scn.description = ['Open rural road. Two cattle step into the road at ' ...
                    't = 6.0 s and t = 6.8 s at different speeds, so the gap ' ...

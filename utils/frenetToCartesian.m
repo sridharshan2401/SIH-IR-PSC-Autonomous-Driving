@@ -27,9 +27,9 @@ function Q = frenetToCartesian(P, sQuery, dQuery)
 %
 %   See also PROJECTPOINTONPATH, DEFORMTRAJECTORY.
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'finite','real'}, mfilename, 'P');
-validateattributes(sQuery, {'numeric'}, {'vector','finite','real'}, mfilename, 'sQuery');
-validateattributes(dQuery, {'numeric'}, {'finite','real'}, mfilename, 'dQuery');
+requireInput(isnumeric(P) && size(P,2) == 2 && all(isfinite(P(:))), 'frenetToCartesian', 'P must be a finite Nx2');
+requireInput(isnumeric(sQuery) && isvector(sQuery) && all(isfinite(sQuery)), 'frenetToCartesian', 'sQuery must be a finite vector');
+requireInput(isnumeric(dQuery) && all(isfinite(dQuery(:))), 'frenetToCartesian', 'dQuery must be finite');
 
 sQuery = sQuery(:);
 M      = numel(sQuery);

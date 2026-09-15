@@ -138,12 +138,15 @@ leftObs    = false(N,1);
 rightObs   = false(N,1);
 
 % --- 3-4. Perpendicular boundary rays, eroded ----------------------------
+% All left and right rays in one vectorised query (Phase 2, speed).
+dLR = rayCastGridMulti(grid, [seedR; seedR], [thSeed + pi/2; thSeed - pi/2], ...
+                       c.maxRayLength, c.rayStep);
 for i = 1:N
     hL = thSeed(i) + pi/2;    % left normal
     hR = thSeed(i) - pi/2;    % right normal
 
-    [dL, ~] = rayCastGrid(grid, seedR(i,:), hL, c.maxRayLength, c.rayStep);
-    [dR, ~] = rayCastGrid(grid, seedR(i,:), hR, c.maxRayLength, c.rayStep);
+    dL = dLR(i);
+    dR = dLR(N + i);
 
     leftObs(i)  = dL < c.maxRayLength - 1e-6;
     rightObs(i) = dR < c.maxRayLength - 1e-6;

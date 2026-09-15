@@ -28,29 +28,25 @@ function k = pathCurvature(P)
 %
 %   See also PATHHEADING, CHECKFEASIBILITY.
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'finite','real'}, mfilename, 'P');
+requireInput(isnumeric(P) && size(P,2) == 2 && all(isfinite(P(:))), 'pathCurvature', 'P must be a finite Nx2');
 N = size(P,1);
 k = zeros(N,1);
 if N < 3
     return;
 end
 
-for i = 2:N-1
-    v1 = P(i,:)   - P(i-1,:);
-    v2 = P(i+1,:) - P(i,:);
-    n1 = hypot(v1(1), v1(2));
-    n2 = hypot(v2(1), v2(2));
-    v3 = P(i+1,:) - P(i-1,:);
-    n3 = hypot(v3(1), v3(2));
-
-    denom = n1 * n2 * n3;
-    if denom < 1e-9
-        k(i) = 0;              % coincident points: no meaningful curvature
-        continue;
-    end
-    crossZ = v1(1)*v2(2) - v1(2)*v2(1);
-    k(i)   = 2 * crossZ / denom;
-end
+% Vectorised circumscribed-circle curvature (Phase 2, for speed).
+v1 = P(2:N-1,:) - P(1:N-2,:);
+v2 = P(3:N,:)   - P(2:N-1,:);
+v3 = P(3:N,:)   - P(1:N-2,:);
+n1 = sqrt(sum(v1.^2, 2));
+n2 = sqrt(sum(v2.^2, 2));
+n3 = sqrt(sum(v3.^2, 2));
+denom  = n1 .* n2 .* n3;
+crossZ = v1(:,1) .* v2(:,2) - v1(:,2) .* v2(:,1);
+kin = 2 * crossZ ./ max(denom, 1e-300);
+kin(denom < 1e-9) = 0;                     % coincident points: no curvature
+k(2:N-1) = kin;
 
 k(1) = k(2);
 k(N) = k(N-1);

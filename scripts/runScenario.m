@@ -152,6 +152,9 @@ log.decisionReason = cell(nSteps,1);
 log.behaviour      = cell(nSteps,1);
 log.status         = cell(nSteps,1);
 log.emergencyBrake = false(nSteps,1);
+log.speedLimit     = zeros(nSteps,1);
+log.stateChanged   = false(nSteps,1);
+log.rejectedTraj   = cell(nSteps,1);
 log.collided       = false(nSteps,1);
 log.collidedStatic = false(nSteps,1);
 log.collidedDynamic= false(nSteps,1);
@@ -282,6 +285,9 @@ for k = 1:nSteps
     log.behaviour{k}      = getFieldOr(plan, 'behaviour', struct());
     log.status{k}         = getFieldOr(plan, 'status', 'ok');
     log.emergencyBrake(k) = action.emergencyBrake;
+    log.speedLimit(k)     = action.speedLimit;
+    log.stateChanged(k)   = action.stateChanged;
+    log.rejectedTraj{k}   = getFieldOr(plan, 'rejectedTraj', []);
     log.collidedDynamic(k)= colDyn;
     log.collidedStatic(k) = colStat;
     log.collided(k)       = colDyn || colStat;
@@ -311,6 +317,7 @@ for k = 1:nSteps
                        'detections', dets, 'potholeTracks', potholeTracks, ...
                        'potholeDets', log.potholeDets{k}, 'steer', steerCmd, ...
                        'accel', accelCmd, 'collided', log.collided(k), ...
+                       'replanned', log.replanned(k), ...
                        'log', []);
         frame.log = log;          % full preallocated log; entries 1..k are valid
         keepGoing = onStep(frame);

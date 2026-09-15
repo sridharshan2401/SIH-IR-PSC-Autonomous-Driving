@@ -34,8 +34,8 @@ function [s, d, idx, foot] = projectPointOnPath(P, pt)
 %
 %   See also PATHARCLENGTH, FRENETTOCARTESIAN.
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'finite','real'}, mfilename, 'P');
-validateattributes(pt, {'numeric'}, {'vector','numel',2,'finite','real'}, mfilename, 'pt');
+requireInput(isnumeric(P) && size(P,2) == 2 && all(isfinite(P(:))), 'projectPointOnPath', 'P must be a finite Nx2');
+requireInput(numel(pt) == 2 && all(isfinite(pt)), 'projectPointOnPath', 'pt must be a finite 1x2');
 pt = pt(:).';
 
 N = size(P,1);
@@ -43,38 +43,26 @@ if N < 2
     error('projectPointOnPath:tooShort', 'Need at least 2 path points.');
 end
 
-sCum  = pathArcLength(P);
-bestD2   = Inf;
-idx      = 1;
-foot     = P(1,:);
-s        = 0;
-bestSide = 0;
+% Vectorised over all segments (Phase 2, for speed; identical result).
+A  = P(1:N-1, :);
+AB = P(2:N, :) - A;
+L2 = AB(:,1).^2 + AB(:,2).^2;
+AP = [pt(1) - A(:,1), pt(2) - A(:,2)];
+t  = (AP(:,1) .* AB(:,1) + AP(:,2) .* AB(:,2)) ./ max(L2, 1e-12);
+t(L2 < 1e-12) = 0;
+t  = min(max(t, 0), 1);                    % clamp to each segment
+F  = A + [t .* AB(:,1), t .* AB(:,2)];
+d2 = (pt(1) - F(:,1)).^2 + (pt(2) - F(:,2)).^2;
 
-for i = 1:N-1
-    a   = P(i,:);
-    b   = P(i+1,:);
-    ab  = b - a;
-    L2  = ab(1)^2 + ab(2)^2;
-    if L2 < 1e-12
-        t = 0;
-    else
-        t = ((pt - a) * ab.') / L2;
-        t = min(max(t, 0), 1);          % clamp to the segment
-    end
-    f  = a + t * ab;
-    d2 = (pt(1)-f(1))^2 + (pt(2)-f(2))^2;
+[bestD2, idx] = min(d2);                   % first minimum, as the loop did
+foot = F(idx, :);
+segLen = sqrt(L2);
+sCum = [0; cumsum(segLen)];
+s = sCum(idx) + t(idx) * segLen(idx);
 
-    if d2 < bestD2
-        bestD2 = d2;
-        idx    = i;
-        foot   = f;
-        s      = sCum(i) + t * sqrt(L2);
-        % Sign convention: z-component of cross(tangent, a->pt).
-        % Positive means pt lies to the LEFT of the direction of travel.
-        bestSide = ab(1)*(pt(2)-a(2)) - ab(2)*(pt(1)-a(1));
-    end
-end
-
+% Sign convention: z-component of cross(tangent, a->pt).
+% Positive means pt lies to the LEFT of the direction of travel.
+bestSide = AB(idx,1) * AP(idx,2) - AB(idx,2) * AP(idx,1);
 d = sqrt(bestD2) * sign(bestSide);
 if bestSide == 0
     d = 0;

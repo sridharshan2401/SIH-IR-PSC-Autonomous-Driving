@@ -119,6 +119,8 @@ if ~isempty(corridor.blockedIdx)
     sStop = corridor.usableLength - vp.frontOverhang - cfg.corridor.stopStandoff;
     ceilBase(corrUse.s >= sStop) = 0;
 end
+% Same rule as IR-PSC: be able to stop within the known drivable space.
+ceilBase(corrUse.s >= corrUse.s(end) - vp.frontOverhang - cfg.corridor.stopStandoff) = 0;
 
 % --- Fixed candidate set --------------------------------------------------
 candidateOffsets = cfg.baseline.candidateOffsets;

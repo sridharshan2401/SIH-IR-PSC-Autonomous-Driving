@@ -75,7 +75,11 @@ if size(traj.pos,1) >= 2
     keep = [true; diff(sP) > 1e-9];
     if sum(keep) >= 2
         sK = sP(keep);  vK = vP(keep);
-        sQ = min(max(sEgo + max(ego.speed, 0) * cfg.control.speedPreview, sK(1)), sK(end));
+        % Preview at least cfg.control.minPreviewDist ahead. At standstill a
+        % zero preview reads the profile exactly where it starts -- at the
+        % current speed, 0 -- and the vehicle would never pull away.
+        prev = max(max(ego.speed, 0) * cfg.control.speedPreview, cfg.control.minPreviewDist);
+        sQ = min(max(sEgo + prev, sK(1)), sK(end));
         vTarget = interp1(sK, vK, sQ, 'linear');
         j  = min(max(find(sK <= sQ, 1, 'last'), 1), numel(sK) - 1);
         dvds = (vK(j+1) - vK(j)) / (sK(j+1) - sK(j));

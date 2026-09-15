@@ -1,4 +1,4 @@
-function hit = potholeWheelOverlap(corridor, D, potholes, cfg, vp)
+function hit = potholeWheelOverlap(corridor, D, potholes, cfg, vp, margin)
 %POTHOLEWHEELOVERLAP Which (station, offset) choices put a tyre into a pothole.
 %
 %   COMPONENT STATUS: SIMPLIFIED (planar wheel-track geometry)
@@ -29,6 +29,10 @@ function hit = potholeWheelOverlap(corridor, D, potholes, cfg, vp)
 %                  (pothole tracks from potholeTracker, or ground truth)
 %       cfg      - config struct from irpscConfig()
 %       vp       - vehicle params struct from vehicleParams()
+%       margin   - (optional) extra lateral clearance (m) added around each
+%                  pothole. Default 0. Planning uses
+%                  cfg.pothole.lateralMargin so the controller's small
+%                  tracking error does not put a tyre on the rim.
 %
 %   Outputs:
 %       hit - NxKxP logical
@@ -37,6 +41,7 @@ function hit = potholeWheelOverlap(corridor, D, potholes, cfg, vp)
 %
 %   See also POTHOLECOSTGRID, POTHOLETRACKER, IRPSCPLANNER.
 
+if nargin < 6 || isempty(margin), margin = 0; end
 N = size(corridor.center, 1);
 if size(D,1) ~= N
     D = D(:);
@@ -49,7 +54,7 @@ if P == 0 || N < 2
 end
 
 halfTrack = cfg.pothole.wheelTrack / 2;
-halfTyre  = cfg.pothole.tyreWidth / 2;
+halfTyre  = cfg.pothole.tyreWidth / 2 + margin;
 s = corridor.s(:);
 
 for p = 1:P

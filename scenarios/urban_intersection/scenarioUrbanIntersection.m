@@ -66,6 +66,7 @@ grid = buildRoadGrid(centerline, halfWidth, res, extras);
 crossCl = [0, -30; 0, 30];
 gridCross = buildRoadGrid(crossCl, 3.6, res, []);
 grid = mergeFreeSpace(grid, gridCross);
+grid = gridDistanceField(grid, 3.0);     % occupancy changed: refresh the field
 
 % --- Actors --------------------------------------------------------------
 % Cross traffic southbound, timed to reach the junction with the ego.
@@ -99,6 +100,9 @@ scn.egoStart    = struct('pos', [-42, 0], 'heading', 0, 'speed', 8.0);
 scn.goal        = [50, 0];
 scn.goalRadius  = 5.0;
 scn.actors      = actors;
+scn.extras      = extras;
+scn.extraTypes  = repmat({'building'}, 1, numel(extras));
+scn.environment = 'urban';
 scn.duration    = 40.0;
 scn.sihScenario = 'B: Busy unsignalized urban intersection';
 scn.description = ['Four-way junction, no signal, no marked right of way. ' ...

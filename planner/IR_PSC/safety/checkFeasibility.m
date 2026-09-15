@@ -19,7 +19,17 @@ function [ok, details] = checkFeasibility(traj, cfg, vp)
 %        <= cfg.safety.maxCurvature.
 %     2. Lateral acceleration v^2 * |k| <= cfg.ego.maxLatAccel.
 %     3. Longitudinal acceleration within [-maxDecel, +maxAccel].
-%     4. Longitudinal jerk within +/- cfg.ego.maxJerk.
+%     4. Longitudinal jerk within +/- cfg.ego.maxJerk -- a COMFORT limit.
+%        Phase 2: a jerk excess is reported in details.comfortViolations
+%        but does not reject the plan. Rejecting it replaced a slightly
+%        jerky braking profile with a safe-stop trajectory that brakes
+%        harder still -- the opposite of the intent -- and the violations
+%        seen in closed loop were dominated by the vehicle already braking
+%        (an initial condition no plan can undo) and by finite-difference
+%        estimation on spatially sampled profiles. SPEEDPROFILE still
+%        respects the limit by construction (see
+%        testPlannerCore/testSpeedProfileRespectsJerkOnStraightRoad), and
+%        metrics count comfort violations so they cannot hide.
 %     5. Implied steering angle within +/- cfg.ego.maxSteer.
 %
 %   Inputs:
@@ -33,7 +43,8 @@ function [ok, details] = checkFeasibility(traj, cfg, vp)
 %                 .maxCurvature, .maxLatAccel, .maxAccel, .maxDecel,
 %                 .maxJerk, .maxSteer  - the worst value observed
 %                 .curvatureOk, .latAccelOk, .accelOk, .jerkOk, .steerOk
-%                 .violations - cellstr naming each failed check
+%                 .violations - cellstr naming each failed HARD check
+%                 .comfortViolations - cellstr, comfort checks exceeded
 %
 %   Example:
 %       [ok, d] = checkFeasibility(traj, cfg, vp);
@@ -58,6 +69,7 @@ k = k(:);  v = v(:);  t = t(:);  s = s(:);
 N = numel(v);
 
 details.violations = {};
+details.comfortViolations = {};
 
 % --- 1. Curvature ------------------------------------------------------
 maxK   = max([abs(k); 0]);
@@ -83,10 +95,16 @@ latAccelOk = ~any(over & avoidable);
 details.unavoidableLatAccel = any(over & ~avoidable);
 
 % --- 3. Longitudinal acceleration --------------------------------------
+% Phase 2: estimated in the distance domain, a = (v2^2 - v1^2) / (2 ds),
+% which is exact for constant acceleration over a segment and stays well
+% conditioned at low speed. The earlier dv/dt used arrival times that are
+% floored near standstill, and produced large spurious accelerations and
+% jerks exactly when the vehicle was stopping.
 if N >= 2
-    dt = diff(t);
-    dt(dt <= 0) = eps;
-    aLon = diff(v) ./ dt;
+    ds = diff(s);
+    segOk = ds > 1e-6;
+    aLon = zeros(N-1, 1);
+    aLon(segOk) = (v([false; segOk]).^2 - v([segOk; false]).^2) ./ (2 * ds(segOk));
 else
     aLon = 0;
 end
@@ -96,14 +114,15 @@ accelOk = maxAcc <= cfg.ego.maxAccel + 1e-3 && ...
           maxDec <= cfg.ego.maxDecel + 1e-3;
 
 % --- 4. Jerk -----------------------------------------------------------
-% aLon(i) is the mean acceleration over [t(i), t(i+1)], centred at the
-% interval midpoint, so consecutive values are separated by the MIDPOINT
-% spacing. (The earlier code divided by t(i+1)-t(i), which is wrong for
-% non-uniform sample times.)
+% Jerk between consecutive segments: the change in acceleration divided by
+% the time taken to travel between segment midpoints at the local speed.
+% Near standstill that time is long, and the jerk correctly tends to zero.
 if numel(aLon) >= 2
-    tm  = 0.5 * (t(1:end-1) + t(2:end));
-    dt2 = diff(tm);
-    dt2(dt2 <= 0) = eps;
+    sm   = 0.5 * (s(1:end-1) + s(2:end));
+    vm   = 0.5 * (v(1:end-1) + v(2:end));
+    dsm  = diff(sm);
+    vloc = max(0.5 * (vm(1:end-1) + vm(2:end)), 0.3);
+    dt2  = max(dsm ./ vloc, 1e-3);
     jerk = diff(aLon) ./ dt2;
 else
     jerk = 0;
@@ -132,7 +151,7 @@ details.steerOk      = steerOk;
 if ~curvatureOk, details.violations{end+1} = 'curvature'; end
 if ~latAccelOk,  details.violations{end+1} = 'lateralAcceleration'; end
 if ~accelOk,     details.violations{end+1} = 'longitudinalAcceleration'; end
-if ~jerkOk,      details.violations{end+1} = 'jerk'; end
+if ~jerkOk,      details.comfortViolations{end+1} = 'jerk'; end
 if ~steerOk,     details.violations{end+1} = 'steeringAngle'; end
 
 ok = isempty(details.violations);

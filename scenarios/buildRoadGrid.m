@@ -79,8 +79,15 @@ Y = grid.origin(2) + (rows - 1) * resolution;
 
 free = false(nRows, nCols);
 for i = 1:denseN
-    d2 = (X - clDense(i,1)).^2 + (Y - clDense(i,2)).^2;
-    free = free | (d2 <= hwDense(i)^2);
+    % Only cells inside this disc's bounding box can change (Phase 2, speed).
+    c0 = max(1, floor((clDense(i,1) - hwDense(i) - grid.origin(1)) / resolution) + 1);
+    c1 = min(nCols, ceil((clDense(i,1) + hwDense(i) - grid.origin(1)) / resolution) + 1);
+    r0 = max(1, floor((clDense(i,2) - hwDense(i) - grid.origin(2)) / resolution) + 1);
+    r1 = min(nRows, ceil((clDense(i,2) + hwDense(i) - grid.origin(2)) / resolution) + 1);
+    if c0 > c1 || r0 > r1, continue; end
+    Xs = X(r0:r1, c0:c1);  Ys = Y(r0:r1, c0:c1);
+    d2 = (Xs - clDense(i,1)).^2 + (Ys - clDense(i,2)).^2;
+    free(r0:r1, c0:c1) = free(r0:r1, c0:c1) | (d2 <= hwDense(i)^2);
 end
 grid.occ(free) = false;
 
@@ -103,4 +110,8 @@ for e = 1:numel(extras)
         grid.occ(inside) = true;
     end
 end
+
+% Distance-to-obstacle field for the planner's static clearance cost
+% (Phase 2). Computed once, here, because the grid is static.
+grid = gridDistanceField(grid, 3.0);
 end

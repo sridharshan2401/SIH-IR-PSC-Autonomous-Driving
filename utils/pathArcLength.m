@@ -19,8 +19,8 @@ function s = pathArcLength(P)
 %
 %   See also RESAMPLEPATH, PATHCURVATURE.
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'nonempty','finite','real'}, ...
-                   mfilename, 'P');
+requireInput(isnumeric(P) && size(P,2) == 2 && ~isempty(P) && all(isfinite(P(:))), ...
+             'pathArcLength', 'P must be a non-empty finite Nx2');
 
 if size(P,1) == 1
     s = 0;

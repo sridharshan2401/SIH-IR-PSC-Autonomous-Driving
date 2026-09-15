@@ -45,7 +45,8 @@ function scn = buildScenario(name, seed)
 %                    cattle crossing, a pedestrian. See scenarioDemo.m.
 %
 %   Inputs:
-%       name - char, one of 'village','urban','highway','market','cattle'
+%       name - char, one of 'demo','village','urban','highway','market',
+%              'cattle'; or a prebuilt scenario struct (used by tests)
 %       seed - (optional) integer random seed for reproducibility.
 %              Default 0. Every experiment MUST pass an explicit seed so
 %              results can be reproduced exactly.
@@ -85,6 +86,15 @@ function scn = buildScenario(name, seed)
 
 if nargin < 2 || isempty(seed), seed = 0; end
 
+% Phase 2: a prebuilt scenario struct (e.g. a small synthetic test road) is
+% accepted as-is and given the standard optional fields.
+if isstruct(name)
+    scn = name;
+    scn.seed = seed;
+    scn = finaliseScenario(scn);
+    return;
+end
+
 name = lower(char(name));
 res  = 0.20;                      % m per cell
 
@@ -122,6 +132,18 @@ end
 if ~isfield(scn, 'staticObjects')
     scn.staticObjects = struct('type',{},'center',{},'halfSize',{},'radius',{}, ...
                                'yaw',{},'height',{},'inGrid',{});
+    % Display metadata for the grid obstacles, if the scenario labelled them.
+    if isfield(scn, 'extras') && isfield(scn, 'extraTypes')
+        for i = 1:numel(scn.extras)
+            ex = scn.extras(i);
+            typ = scn.extraTypes{min(i, numel(scn.extraTypes))};
+            yaw = 0;
+            if isfield(ex, 'yaw') && ~isempty(ex.yaw), yaw = ex.yaw; end
+            scn.staticObjects(end+1) = struct('type', typ, 'center', ex.center(:).', ...
+                'halfSize', ex.halfSize, 'radius', ex.radius, 'yaw', yaw, ...
+                'height', defaultHeight(typ), 'inGrid', true);
+        end
+    end
 end
 if ~isfield(scn, 'roadHalfWidth')
     scn.roadHalfWidth = nan(size(scn.centerline,1),1);
@@ -131,5 +153,16 @@ if ~isfield(scn, 'markings')
 end
 if ~isfield(scn, 'environment')
     scn.environment = 'rural';
+end
+end
+
+function h = defaultHeight(typ)
+switch typ
+    case 'building', h = 8.0;
+    case 'truck',    h = 3.2;
+    case 'stall',    h = 2.4;
+    case 'barrier',  h = 0.9;
+    case 'bush',     h = 1.6;
+    otherwise,       h = 0.6;
 end
 end

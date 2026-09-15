@@ -50,7 +50,14 @@ function [seed, info] = seedCenterline(grid, ego, cfg)
 c        = cfg.corridor;
 stepLen  = c.stationStep;
 nSteps   = max(1, ceil(c.lookaheadDist / stepLen));
-fanHalf  = c.seedHeadingFan;
+% Phase 2: the heading change per step is bounded by what the vehicle can
+% actually turn in one step (its maximum path curvature times the step
+% length, with a factor 2 of slack). A +/-0.7 rad fan per 1 m step let the
+% seed bend at a 1.4 m radius -- e.g. swerving sideways at a dead end --
+% and handed the planner corridors no car can drive.
+vpSeed   = vehicleParams(cfg);
+kSeed    = min(vpSeed.maxCurvature, cfg.safety.maxCurvature);
+fanHalf  = min(c.seedHeadingFan, 2 * kSeed * stepLen);
 nFan     = max(3, c.seedFanCount);
 probeLen = min(c.lookaheadDist, c.seedProbeLength);   % candidate look-ahead
 
@@ -69,20 +76,14 @@ k           = 1;
 fanOffsets = linspace(-fanHalf, fanHalf, nFan);
 
 for i = 1:nSteps
-    bestScore   = -Inf;
-    bestHeading = curHeading;
-    bestFree    = 0;
-
-    for j = 1:nFan
-        hTest = curHeading + fanOffsets(j);
-        d     = rayCastGrid(grid, curPos, hTest, probeLen, c.rayStep);
-        score = d - turnPenalty * abs(fanOffsets(j));
-        if score > bestScore
-            bestScore   = score;
-            bestHeading = hTest;
-            bestFree    = d;
-        end
-    end
+    % All fan rays in one vectorised query (Phase 2, speed). The first
+    % maximum wins, exactly as the original strict '>' comparison did.
+    hTest  = curHeading + fanOffsets(:);
+    dFan   = rayCastGridMulti(grid, curPos, hTest, probeLen, c.rayStep);
+    scores = dFan - turnPenalty * abs(fanOffsets(:));
+    [~, jBest]  = max(scores);
+    bestHeading = hTest(jBest);
+    bestFree    = dFan(jBest);
 
     % If even the best direction cannot fit one more station, stop marching.
     % A short seed is honest information: it tells the planner the corridor

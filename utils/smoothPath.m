@@ -37,12 +37,12 @@ function Q = smoothPath(P, halfWin, passes, lockEnds)
 if nargin < 3 || isempty(passes),   passes   = 1;    end
 if nargin < 4 || isempty(lockEnds), lockEnds = true; end
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'nonempty','finite','real'}, ...
-                   mfilename, 'P');
-validateattributes(halfWin, {'numeric'}, {'scalar','integer','nonnegative'}, ...
-                   mfilename, 'halfWin');
-validateattributes(passes, {'numeric'}, {'scalar','integer','positive'}, ...
-                   mfilename, 'passes');
+requireInput(isnumeric(P) && size(P,2) == 2 && ~isempty(P) && all(isfinite(P(:))), ...
+             'smoothPath', 'P must be a non-empty finite Nx2');
+requireInput(isscalar(halfWin) && halfWin >= 0 && halfWin == round(halfWin), ...
+             'smoothPath', 'halfWin must be a non-negative integer');
+requireInput(isscalar(passes) && passes >= 1 && passes == round(passes), ...
+             'smoothPath', 'passes must be a positive integer');
 
 Q = P;
 N = size(P,1);
@@ -53,14 +53,14 @@ end
 first = P(1,:);
 last  = P(end,:);
 
+lo = max((1:N).' - halfWin, 1);
+hi = min((1:N).' + halfWin, N);
+cnt = hi - lo + 1;
 for p = 1:passes
-    S = Q;
-    for i = 1:N
-        lo = max(1, i - halfWin);
-        hi = min(N, i + halfWin);
-        S(i,:) = mean(Q(lo:hi, :), 1);
-    end
-    Q = S;
+    % Shrinking-window moving average via cumulative sums (Phase 2, for
+    % speed; identical to averaging Q(lo:hi,:) at each point).
+    C = [zeros(1,2); cumsum(Q, 1)];
+    Q = (C(hi+1,:) - C(lo,:)) ./ [cnt cnt];
 end
 
 if lockEnds

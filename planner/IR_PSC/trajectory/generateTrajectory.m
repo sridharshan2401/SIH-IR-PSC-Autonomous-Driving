@@ -74,20 +74,22 @@ if numel(dProfile) ~= N
     dProfile = resampleSeries(dProfile, N);
 end
 
-if cfg.traj.smoothWindow > 0
-    dSmooth = smoothSeries(dProfile, cfg.traj.smoothWindow, cfg.traj.smoothPasses);
-else
-    dSmooth = dProfile;
-end
-% Smoothing must not undo the anchor: the vehicle is where it is.
-dSmooth(1) = dProfile(1);
+dSmooth = smoothOffsetProfile(dProfile, cfg);    % keeps station 1 at the vehicle
 
 P = frenetToCartesian(corridor.center, corridor.s, dSmooth);
 P(1,:) = ego.pos(:).';
 
-M = cfg.traj.numPoints;
+% Sample spacing of at least ~0.8 m: on a short (truncated) corridor 41
+% points would be packed 0.3 m apart, where millimetre wobbles turn into
+% large curvature estimates and spurious feasibility failures.
+Lpath = pathArcLength(P);
+M = max(5, min(cfg.traj.numPoints, floor(Lpath(end) / 0.8) + 1));
 P = resamplePath(P, M);
 P = smoothPath(P, cfg.traj.smoothWindow, cfg.traj.smoothPasses, true);
+% End-locked smoothing bunches points near the ends (the second point can
+% move several metres). Resample again so spacing is uniform for the
+% curvature and speed computations (Phase 2).
+P = resamplePath(P, M);
 
 sArc = pathArcLength(P);
 th   = pathHeading(P);

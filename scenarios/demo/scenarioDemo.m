@@ -113,7 +113,7 @@ grid = buildRoadGrid(centerline, halfWidth, res, extras);
 % ---------------------------------------------------------------------
 % Potholes (drivable surface hazards, NOT in the occupancy grid)
 % ---------------------------------------------------------------------
-potholes = makePothole(1, at(62, 0.15),  1.3, 1.0, 0.07, 'Yaw', hdgAt(62));    % moderate
+potholes = makePothole(1, at(62, 0.15),  1.4, 1.5, 0.07, 'Yaw', hdgAt(62));    % moderate, too wide to straddle
 potholes(end+1) = makePothole(2, at(80, 0.0),   0.50, 0.40, 0.03, 'Yaw', hdgAt(80));  % minor, straddle
 potholes(end+1) = makePothole(3, at(206, -0.9), 1.6, 1.4, 0.14, 'Yaw', hdgAt(206));   % severe
 potholes(end+1) = makePothole(4, at(222, -0.1), 1.1, 5.2, 0.06, 'Yaw', hdgAt(222));   % wide patch
@@ -122,10 +122,10 @@ potholes(end+1) = makePothole(4, at(222, -0.1), 1.1, 5.2, 0.06, 'Yaw', hdgAt(222
 % Road users. Offsets d are to the LEFT of the road direction; India
 % drives on the left, so oncoming traffic uses negative d.
 % ---------------------------------------------------------------------
-actors = makeActor(1, 'car', roadPath(centerline, 150, 0, -1.9), 9.0, ...
+actors = makeActor(1, 'car', roadPath(centerline, 115, 0, -1.9), 9.0, ...
                    'TriggerS', 0);
-actors(end+1) = makeActor(2, 'bicycle', roadPath(centerline, 118, 336, 0.9), 3.2, ...
-                          'TriggerS', 40);
+actors(end+1) = makeActor(2, 'bicycle', roadPath(centerline, 118, 166, 0.9), 3.2, ...
+                          'TriggerS', 40, 'StopAtEnd', false);   % turns off into a lane at s=166
 actors(end+1) = makeActor(3, 'bus', roadPath(centerline, 300, 0, -1.8), 8.0, ...
                           'TriggerS', 72);
 actors(end+1) = makeActor(4, 'autorickshaw', roadPath(centerline, 330, 0, -1.7), 6.0, ...
@@ -135,7 +135,7 @@ actors(end+1) = makeActor(5, 'animal', cowWp, 0.9, 'TriggerS', 232, ...
                           'Dwell', [0; 0; 2.5; 0; 0]);
 pedWp = [at(292, 5.5); at(292, -5.5)];
 actors(end+1) = makeActor(6, 'pedestrian', pedWp, 1.3, 'TriggerS', 270);
-actors(end+1) = makeActor(7, 'motorcycle', roadPath(centerline, 0, 336, 1.4), 9.0, ...
+actors(end+1) = makeActor(7, 'motorcycle', roadPath(centerline, 0, 336, 0.6), 9.0, ...
                           'TriggerS', 20, 'Follower', true);
 
 % ---------------------------------------------------------------------

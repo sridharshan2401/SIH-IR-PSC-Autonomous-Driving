@@ -62,25 +62,36 @@ end
 
 grid = buildRoadGrid(centerline, halfWidth, res, extras);
 
-% --- Actors --------------------------------------------------------------
-% Slow truck directly ahead.
-truckPath = [centerline(15,:) + [0 -1.5]; centerline(end,:) + [0 -1.5]];
-actors = makeActor(1, 'truck', truckPath, 8.0, 'StartTime', 0);
-
-% Second slow vehicle further ahead, so overtaking once is not enough.
-busPath = [centerline(35,:) + [0 1.5]; centerline(end,:) + [0 1.5]];
-actors(end+1) = makeActor(2, 'bus', busPath, 9.5, 'StartTime', 0);
-
-% Merging vehicle: enters from the right at a shallow angle, no signal.
+% Phase 2: the on-ramp is now part of the drivable grid, so the merging car
+% no longer drives across non-drivable space.
 mergeStart = centerline(18,:) + [0, -9.0];
 mergeMid   = centerline(28,:) + [0, -4.0];
 mergeEnd   = centerline(60,:) + [0, -0.5];
-actors(end+1) = makeActor(3, 'car', [mergeStart; mergeMid; mergeEnd], ...
+rampCl = resamplePath([mergeStart; mergeMid; centerline(34,:) + [0, -2.5]], 40);
+rampGrid = buildRoadGrid(rampCl, 2.2, res, []);
+[cols, rows] = meshgrid(1:grid.nCols, 1:grid.nRows);
+Xg = grid.origin(1) + (cols - 1) * res;
+Yg = grid.origin(2) + (rows - 1) * res;
+rampFree = ~isOccupiedAt(rampGrid, [Xg(:), Yg(:)]);
+grid.occ(reshape(rampFree, size(grid.occ))) = false;
+grid = gridDistanceField(grid, 3.0);
+
+% --- Actors --------------------------------------------------------------
+% Slow truck directly ahead.
+truckPath = roadPath(centerline, 56, 300, -1.5);
+actors = makeActor(1, 'truck', truckPath, 8.0, 'StartTime', 0);
+
+% Second slow vehicle further ahead, so overtaking once is not enough.
+busPath = roadPath(centerline, 136, 300, 1.5);
+actors(end+1) = makeActor(2, 'bus', busPath, 9.5, 'StartTime', 0);
+
+% Merging vehicle: enters from the right at a shallow angle, no signal.
+actors(end+1) = makeActor(3, 'car', [resamplePath([mergeStart; mergeMid], 12); ...
+                          roadPath(centerline, 112, 236, -0.5)], ...
                           14.0, 'StartTime', 1.0);
 
 % An auto-rickshaw travelling well below the flow speed.
-actors(end+1) = makeActor(4, 'autorickshaw', ...
-                          [centerline(50,:) + [0 3.0]; centerline(end,:) + [0 3.0]], ...
+actors(end+1) = makeActor(4, 'autorickshaw', roadPath(centerline, 196, 300, 3.0), ...
                           6.5, 'StartTime', 0);
 
 % --- Assemble ------------------------------------------------------------
@@ -93,6 +104,11 @@ scn.goal        = centerline(end-3,:);
 scn.goalRadius  = 8.0;
 scn.actors      = actors;
 scn.duration    = 45.0;
+scn.roadHalfWidth = halfWidth;
+scn.extras      = extras;
+scn.extraTypes  = repmat({'barrier'}, 1, numel(extras));
+scn.markings    = struct('sFrom', 0, 'sTo', 300);
+scn.environment = 'highway';
 scn.sihScenario = 'C: Highway merge with slow-moving vehicles';
 scn.description = ['Wide higher-speed road. A slow truck ahead, a slow bus ' ...
                    'beyond it, a slow auto-rickshaw, and a car merging from ' ...

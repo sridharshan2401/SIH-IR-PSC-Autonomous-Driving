@@ -25,7 +25,7 @@ function occupied = isOccupiedAt(grid, pts)
 %
 %   See also MAKEOCCUPANCYGRID, RAYCASTGRID.
 
-validateattributes(pts, {'numeric'}, {'2d','ncols',2,'real'}, mfilename, 'pts');
+requireInput(isnumeric(pts) && size(pts,2) == 2, 'isOccupiedAt', 'pts must be Mx2');
 
 M = size(pts,1);
 occupied = true(M,1);          % default: unknown => occupied

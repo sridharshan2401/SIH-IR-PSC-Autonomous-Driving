@@ -70,6 +70,21 @@ if ~isstruct(log) || ~isfield(log, 't') || isempty(log.t)
 end
 
 M.collisionCount = metricCollisionCount(log);
+% Phase 2: static contacts (grid) and dynamic contacts (road users) separately.
+if isfield(log, 'collidedStatic')
+    M.staticContactSteps  = sum(log.collidedStatic);
+    M.dynamicContactSteps = sum(log.collidedDynamic);
+else
+    M.staticContactSteps  = NaN;
+    M.dynamicContactSteps = NaN;
+end
+[M.longestStop, M.stopDetails] = metricLongestStop(log, cfg);
+M.pothole = metricPotholes(log);
+if isfield(log, 'emergencyBrake')
+    M.emergencyBrakeSteps = sum(log.emergencyBrake);
+else
+    M.emergencyBrakeSteps = NaN;
+end
 M.collisionRate  = M.collisionCount / max(numel(log.t), 1);
 
 [M.minClearance, M.meanClearance] = metricClearance(log);

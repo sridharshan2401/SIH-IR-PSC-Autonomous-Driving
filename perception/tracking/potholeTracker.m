@@ -49,7 +49,11 @@ T = tstate.tracks;
 
 for j = 1:numel(dets)
     d = dets(j);
-    best = 0;  bestD = cfg.pothole.gate;
+    best = 0;
+    % Gate grows with the detection's own position noise: a camera
+    % detection 30 m away has ~0.7 m std, and a fixed gate split one
+    % pothole into two tracks (Phase 2 fix).
+    bestD = max(cfg.pothole.gate, 3 * d.posStd);
     for i = 1:numel(T)
         dd = hypot(T(i).pos(1) - d.pos(1), T(i).pos(2) - d.pos(2));
         if dd < bestD
@@ -100,6 +104,36 @@ for j = 1:numel(dets)
     end
 
     T(best) = refreshClass(T(best), cfg);
+end
+
+% Merge tracks that describe the same pothole (closer than their own size
+% plus the gate), keeping the one with more support.
+i = 1;
+while i <= numel(T)
+    j = i + 1;
+    while j <= numel(T)
+        sep = hypot(T(i).pos(1) - T(j).pos(1), T(i).pos(2) - T(j).pos(2));
+        reach = cfg.pothole.gate + 0.5 * max([T(i).length, T(i).width, T(j).length, T(j).width]);
+        if sep < reach
+            if T(j).hits > T(i).hits
+                keepT = T(j);  dropT = T(i);
+            else
+                keepT = T(i);  dropT = T(j);
+            end
+            w1 = keepT.hits;  w2 = dropT.hits;
+            keepT.pos  = (w1 * keepT.pos + w2 * dropT.pos) / (w1 + w2);
+            keepT.hits = w1 + w2;
+            if isnan(keepT.truthId), keepT.truthId = dropT.truthId; end
+            keepT.firstSeen = min(keepT.firstSeen, dropT.firstSeen);
+            keepT.lastSeen  = max(keepT.lastSeen, dropT.lastSeen);
+            keepT = refreshClass(keepT, cfg);
+            T(i) = keepT;
+            T(j) = [];
+        else
+            j = j + 1;
+        end
+    end
+    i = i + 1;
 end
 
 % Drop stale tentative tracks (false positives are rarely re-observed).

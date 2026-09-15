@@ -46,7 +46,7 @@ if isempty(potholes) || N < 2
 end
 
 D   = repmat(offsets(:).', N, 1);
-hit = potholeWheelOverlap(corridor, D, potholes, cfg, vp);
+hit = potholeWheelOverlap(corridor, D, potholes, cfg, vp, cfg.pothole.lateralMargin);
 
 P = numel(potholes);
 unit = zeros(1, P);

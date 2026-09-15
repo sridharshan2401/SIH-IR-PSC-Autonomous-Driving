@@ -182,8 +182,14 @@ t0 = tic;
 [conf, confBreak] = computeConfidence(corridor, preds, obstacles, cfg);
 timing.confidence = toc(t0);
 
+% Following traffic (behind, same direction) must not make the ego brake:
+% see isFollowingRoadUser. It stays in the lateral risk grid only.
+behind   = isFollowingRoadUser(ego, obstacles, vp);
+obsAhead = obstacles(~behind);
+predAhead = preds(~behind);
+
 % Nominal ("do nothing") time to conflict, following the road.
-[ttcNom, ~, ttcDetails] = timeToConflict(ego, preds, cfg, vp, corridor);
+[ttcNom, ~, ttcDetails] = timeToConflict(ego, predAhead, cfg, vp, corridor);
 
 out.corridor             = corridor;
 out.preds                = preds;
@@ -198,7 +204,7 @@ if ~corridor.valid
     out.status = 'no_corridor';
     distAvail  = max(corridor.usableLength - vp.frontOverhang - cfg.corridor.stopStandoff, 0.1);
     needEmerg  = ego.speed^2 / (2 * distAvail) > cfg.ego.maxDecel * cfg.safety.emergencyMargin;
-    out = finishWithSafeStop(out, ego, corridor, cfg, vp, preds, obstacles, ...
+    out = finishWithSafeStop(out, ego, corridor, cfg, vp, predAhead, obsAhead, ...
                              grid, timing, tAll, needEmerg, prevTrajPos);
     return;
 end
@@ -210,7 +216,7 @@ else
     lastUse = max(corridor.blockedIdx - 1, 2);
 end
 corrUse = truncateCorridor(corridor, lastUse);
-out.preferredPath = corrUse.center;
+out.preferredPath = corrUse.center;     % replaced below by the preferred-offset path
 Nu = size(corrUse.center, 1);
 
 % =====================================================================
@@ -222,9 +228,36 @@ t0 = tic;
 [R, offsets] = lateralRiskGrid(corrUse, preds, ego, cfg, vp, dMin, dMax);
 confirmedHazards = confirmedPotholes(roadHazards);
 [Cp, potInfo] = potholeCostGrid(corrUse, offsets, confirmedHazards, cfg, vp);
+[Cs, staticClr] = staticClearanceCost(corrUse, offsets, grid, cfg, vp);
+% The chosen profile is smoothed afterwards (smoothOffsetProfile), which
+% blurs it along the road by about smoothWindow*smoothPasses stations. A
+% dodge exactly as long as a pothole would be smoothed back over it, so the
+% surface and static costs are dilated along the road by that reach first:
+% the dynamic programme then holds the avoiding offset long enough for the
+% smoothed path to keep it (Phase 2).
+reach = cfg.traj.smoothWindow * cfg.traj.smoothPasses;
+extraCost = dilateAlongRoad(cfg.deform.wPothole * Cp + Cs, reach);
+
+% A station no offset can pass (bounds and static clearance) limits the
+% usable corridor exactly like a blocked station: plan up to it and stop
+% before it, instead of declaring the whole plan infeasible.
+rowBlocked = all(~isfinite(R) | ~isfinite(extraCost), 2);
+rowBlocked(1) = false;
+iBlk = find(rowBlocked, 1, 'first');
+sStaticStop = Inf;
+if ~isempty(iBlk) && iBlk >= 3
+    keepRows = 1:(iBlk - 1);
+    sStaticStop = corrUse.s(iBlk) - vp.frontOverhang - cfg.corridor.stopStandoff;
+    corrUse = truncateCorridor(corrUse, iBlk - 1);
+    R = R(keepRows, :);  Cp = Cp(keepRows, :);  Cs = Cs(keepRows, :);
+    staticClr = staticClr(keepRows, :);  extraCost = extraCost(keepRows, :);
+    Nu = numel(keepRows);
+    out.preferredPath = corrUse.center;
+end
 timing.riskGrid = toc(t0);
 
 out.riskGrid = struct('R', R, 'offsets', offsets, 'potholeCost', Cp, ...
+                      'staticClearance', staticClr, ...
                       's', corrUse.s, 'center', corrUse.center, ...
                       'heading', corrUse.heading);
 
@@ -232,15 +265,27 @@ out.riskGrid = struct('R', R, 'offsets', offsets, 'potholeCost', Cp, ...
 priorProfile = profileFromPath(corrUse, prevTrajPos);
 
 t0 = tic;
-[dProfile, defInfo] = deformTrajectory(R, offsets, cfg, d0, priorProfile, Cp);
+% Lateral changes that are comfortable at walking pace are violent at
+% 40 km/h: the smoothness weight grows with the square of speed.
+cfgDP = cfg;
+cfgDP.deform.wSmooth = cfg.deform.wSmooth * max(1, (ego.speed / cfg.deform.smoothRefSpeed)^2);
+[dProfile, defInfo] = deformTrajectory(R, offsets, cfgDP, d0, priorProfile, extraCost);
 timing.deformation = toc(t0);
+if isfield(defInfo, 'preferred') && numel(defInfo.preferred) == Nu
+    out.preferredPath = frenetToCartesian(corrUse.center, corrUse.s, defInfo.preferred);
+end
 
 if ~defInfo.feasible
     out.status = 'deformation_infeasible';
-    out = finishWithSafeStop(out, ego, corridor, cfg, vp, preds, obstacles, ...
+    out = finishWithSafeStop(out, ego, corridor, cfg, vp, predAhead, obsAhead, ...
                              grid, timing, tAll, false, prevTrajPos);
     return;
 end
+
+% The vehicle IS at d0: station 1 is exactly there, not at the nearest
+% lateral grid value. (Quantising it produced a systematic kink ~4 m ahead
+% of the vehicle once the path's first point was snapped back to the car.)
+dProfile(1) = d0;
 
 % =====================================================================
 % STEPS 9-10: speed ceilings, trajectory, smoothing
@@ -250,18 +295,14 @@ stationRisk = zeros(Nu,1);
 for i = 1:Nu
     [~, j] = min(abs(offsets - dProfile(i)));
     r = R(i,j);
+    if ~isfinite(extraCost(i,j)), r = 1; end
     if ~isfinite(r), r = 1; end
     stationRisk(i) = r;
 end
 
 % Same smoothing generateTrajectory applies, so ceilings refer to the path
 % that will actually be driven.
-if cfg.traj.smoothWindow > 0
-    dPath = smoothSeries(dProfile, cfg.traj.smoothWindow, cfg.traj.smoothPasses);
-else
-    dPath = dProfile;
-end
-dPath(1) = dProfile(1);
+dPath = smoothOffsetProfile(dProfile, cfg);
 
 ceilSta = inf(Nu,1);
 beh = out.behaviour;
@@ -269,23 +310,46 @@ beh = out.behaviour;
 % (b) narrow stations
 if any(corrUse.narrow)
     ceilSta(corrUse.narrow) = min(ceilSta(corrUse.narrow), cfg.corridor.narrowSpeed);
-    beh.narrowPassage = true;
+    % Only a narrow passage close ahead is worth reporting as a hazard.
+    beh.narrowPassage = any(corrUse.narrow & corrUse.s <= max(15, 3 * ego.speed));
 end
 
 % (e) blocked station ahead: stop before it with service braking
 sBlockStop = Inf;
 if ~isempty(corridor.blockedIdx)
     sBlockStop = corridor.usableLength - vp.frontOverhang - cfg.corridor.stopStandoff;
+end
+sBlockStop = min(sBlockStop, sStaticStop);
+if isfinite(sBlockStop)
     ceilSta(corrUse.s >= sBlockStop) = 0;
     beh.blockedAhead = true;
 end
 
+% Never outrun the known drivable space: the vehicle must always be able to
+% stop before the end of the usable corridor. On a full-length corridor this
+% constraint is inactive (the stopping distance is shorter than the
+% lookahead); when the corridor ends early -- a wall across the road, a
+% dead end -- it is what brings the vehicle to a controlled stop in time.
+sEndStop = corrUse.s(end) - vp.frontOverhang - cfg.corridor.stopStandoff;
+ceilSta(corrUse.s >= sEndStop) = 0;
+if corridor.stalled
+    % The seed march itself was stopped by an obstruction: the corridor
+    % really does end here.
+    beh.blockedAhead = true;
+    sBlockStop = min(sBlockStop, sEndStop);
+end
+
 % (b) potholes on the chosen path
-[ceilSta, out.potholes, beh] = applyPotholeCeilings(ceilSta, corrUse, dPath, ...
-                                   confirmedHazards, potInfo, offsets, out.potholes, beh, cfg, vp);
+if isfield(defInfo, 'preferred') && numel(defInfo.preferred) == Nu
+    dPref = defInfo.preferred;
+else
+    dPref = zeros(Nu,1);
+end
+[ceilSta, out.potholes, beh] = applyPotholeCeilings(ceilSta, corrUse, dPath, dPref, ...
+                                   confirmedHazards, out.potholes, beh, cfg, vp);
 
 % (c) follow a road user that stays in the path
-[leadCeil, leadInfo] = leadVehicleCeiling(corrUse, dPath, preds, obstacles, ego, cfg, vp);
+[leadCeil, leadInfo] = leadVehicleCeiling(corrUse, dPath, predAhead, obsAhead, ego, cfg, vp);
 ceilSta = min(ceilSta, leadCeil);
 beh.following = leadInfo.active && any(isfinite(leadCeil) & leadCeil < cfg.ego.maxSpeed);
 beh.lead      = leadInfo;
@@ -297,7 +361,7 @@ timing.trajectory = toc(t0);
 % STEPS 9 and 11: time-aware clearance (with yielding) and feasibility
 % =====================================================================
 t0 = tic;
-[clearOk, minClear, cdet] = checkClearance(traj, grid, obstacles, cfg, vp, preds);
+[clearOk, minClear, cdet] = checkClearance(traj, grid, obsAhead, cfg, vp, predAhead);
 sYieldStop = Inf;
 for attempt = 1:3
     if clearOk || isempty(cdet.firstViolationIdx) || cdet.firstViolationIdx <= 1
@@ -308,10 +372,25 @@ for attempt = 1:3
     sYieldStop = min(sYieldStop, sViol - cfg.safety.yieldStandoff);
     ceilSta(corrUse.s >= sYieldStop) = 0;
     traj = generateTrajectory(corrUse, dProfile, ego, cfg, stationRisk, ceilSta);
-    [clearOk, minClear, cdet] = checkClearance(traj, grid, obstacles, cfg, vp, preds);
+    [clearOk, minClear, cdet] = checkClearance(traj, grid, obsAhead, cfg, vp, predAhead);
     beh.yielding = true;
 end
 [feasOk, feasDet] = checkFeasibility(traj, cfg, vp);
+if ~feasOk && clearOk
+    % (b') SLOW for feasibility: a path that is too dynamic at the current
+    % speed is retried with a lower speed cap before giving up. Curvature
+    % and steering violations cannot be fixed this way and remain failures.
+    ceilRetry = min(ceilSta, cfg.traj.feasibilityRetrySpeed * cfg.ego.maxSpeed);
+    trajRetry = generateTrajectory(corrUse, dProfile, ego, cfg, stationRisk, ceilRetry);
+    [okC, mcR, cdR] = checkClearance(trajRetry, grid, obsAhead, cfg, vp, predAhead);
+    [okF, fdR] = checkFeasibility(trajRetry, cfg, vp);
+    if okC && okF
+        traj = trajRetry;  ceilSta = ceilRetry;
+        clearOk = okC;  minClear = mcR;  cdet = cdR;
+        feasOk = okF;   feasDet = fdR;
+        beh.slowing = true;
+    end
+end
 timing.checks = toc(t0);
 
 out.clearanceOk  = clearOk;
@@ -326,12 +405,17 @@ if isfinite(sStopWanted)
     out.requiredDecel = ego.speed^2 / (2 * max(sStopWanted, 0.1));
 end
 
+out.rejectedTraj = [];
+if ~clearOk || ~feasOk
+    out.rejectedTraj = traj;          % shown in the viewer as the rejected candidate
+end
+
 if ~clearOk
     out.status = 'clearance_failed';
     imminent = cdet.firstViolationTime <= cfg.risk.ttcCritical || ...
                out.requiredDecel > cfg.ego.maxDecel * cfg.safety.emergencyMargin;
     out.behaviour = beh;
-    out = finishWithSafeStop(out, ego, corridor, cfg, vp, preds, obstacles, ...
+    out = finishWithSafeStop(out, ego, corridor, cfg, vp, predAhead, obsAhead, ...
                              grid, timing, tAll, imminent, prevTrajPos);
     return;
 end
@@ -339,7 +423,7 @@ end
 if ~feasOk
     out.status = 'feasibility_failed';
     out.behaviour = beh;
-    out = finishWithSafeStop(out, ego, corridor, cfg, vp, preds, obstacles, ...
+    out = finishWithSafeStop(out, ego, corridor, cfg, vp, predAhead, obsAhead, ...
                              grid, timing, tAll, false, prevTrajPos);
     return;
 end
@@ -348,11 +432,15 @@ end
 % STEP 11 (scoring) and hand-off
 % =====================================================================
 out.traj  = traj;
-out.risk  = conflictRisk(traj, preds, cfg, vp);
-out.score = scoreTrajectory(traj, corrUse, preds, cfg, vp);
-out.ttcPlanned = timeToConflict(ego, preds, cfg, vp, traj);
+out.risk  = conflictRisk(traj, predAhead, cfg, vp);
+out.score = scoreTrajectory(traj, corrUse, predAhead, cfg, vp);
+out.ttcPlanned = timeToConflict(ego, predAhead, cfg, vp, traj);
 
-beh.avoiding = max(abs(dPath)) > 0.5;          % bends away from the preferred path
+if isfield(defInfo, 'preferred') && numel(defInfo.preferred) == Nu
+    beh.avoiding = max(abs(dPath - defInfo.preferred)) > 0.5;   % bends away from the preferred path
+else
+    beh.avoiding = max(abs(dPath)) > 0.5;
+end
 reachSpeeds  = traj.speed(traj.reachable);
 beh.slowing  = min(reachSpeeds) < 0.9 * cfg.ego.maxSpeed && ...
                (any(isfinite(ceilSta)) || max(stationRisk) >= cfg.decision.riskHazard);
@@ -407,6 +495,19 @@ out.timing   = timing;
 end
 
 % =====================================================================
+function D = dilateAlongRoad(C, w)
+%DILATEALONGROAD Running maximum of each column over +/- w stations.
+D = C;
+N = size(C,1);
+if w <= 0 || N < 2, return; end
+for i = 1:N
+    D(i,:) = max(C(max(1,i-w):min(N,i+w), :), [], 1);
+end
+% The first stations stay as they were: the vehicle is already there.
+D(1,:) = C(1,:);
+end
+
+% =====================================================================
 function prof = profileFromPath(corr, pathPos)
 %PROFILEFROMPATH Lateral offset of the previous plan at each CURRENT station.
 %   NaN where the previous plan does not cover the station, so temporal
@@ -442,19 +543,19 @@ end
 end
 
 % =====================================================================
-function [ceilSta, list, beh] = applyPotholeCeilings(ceilSta, corr, dPath, ...
-                                   hz, potInfo, offsets, list, beh, cfg, vp)
+function [ceilSta, list, beh] = applyPotholeCeilings(ceilSta, corr, dPath, dPref, ...
+                                   hz, list, beh, cfg, vp)
 %APPLYPOTHOLECEILINGS Speed caps for potholes the chosen path drives over,
 %   and classification of every confirmed pothole ahead:
 %     'slow'     - a tyre goes through it; speed capped to cfg.pothole.speed
-%     'avoid'    - the undeformed centre path would hit it, the chosen does not
+%     'avoid'    - the undeformed preferred path would hit it, the chosen does not
 %     'straddle' - neither path puts a tyre into it
 if isempty(hz)
     return;
 end
 hitPath = potholeWheelOverlap(corr, dPath, hz, cfg, vp);   % Nx1xP
+hitPref = potholeWheelOverlap(corr, dPref, hz, cfg, vp);   % Nx1xP
 s = corr.s(:);
-[~, jCentre] = min(abs(offsets));
 for p = 1:numel(hz)
     li = find([list.id] == hz(p).id, 1);
     if isempty(li), continue; end
@@ -468,8 +569,7 @@ for p = 1:numel(hz)
         list(li).action       = 'slow';
         list(li).plannedSpeed = vCap;
         beh.potholeSlow = true;
-    elseif ~isempty(potInfo.hit) && size(potInfo.hit,3) >= p && ...
-            any(potInfo.hit(:, jCentre, p))
+    elseif any(hitPref(:,1,p))
         list(li).action = 'avoid';
         beh.potholeAvoid = true;
     elseif sp > 0 && sp < s(end)

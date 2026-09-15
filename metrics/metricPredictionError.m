@@ -20,9 +20,18 @@ function [rmse, details] = metricPredictionError(log, cfg)
 %   that is excellent at 1 s and hopeless at 3 s is a different engineering
 %   problem from one that is mediocre throughout.
 %
-%   Matching is by track id against ground-truth id. Road users that appear
-%   or disappear mid-horizon are skipped rather than counted as large
-%   errors, since that would measure track lifetime rather than prediction.
+%   Matching (Phase 2 fix): each prediction carries .truthId, the id of the
+%   ground-truth road user its track was associated with. The earlier code
+%   compared TRACK ids (1, 2, 3, ... assigned by the tracker) with ACTOR ids
+%   (assigned by the scenario), which only coincide by accident, so with
+%   simulated sensors the metric compared unrelated road users. Predictions
+%   with no truth association (false-positive tracks) are skipped, as are
+%   road users that disappear mid-horizon.
+%
+%   Timing (Phase 2 fix): the planner runs every cfg.sim.planEvery steps
+%   and its predictions are reused in between, so only steps where a new
+%   plan was made (log.replanned) are evaluated, against the plan's own
+%   time stamp (log.planStamp).
 %
 %   Inputs:
 %       log - simulation log struct with fields .t, .preds, .obstacles
@@ -52,48 +61,60 @@ N  = numel(t);
 H  = cfg.prediction.horizon;
 horizons = [1.0, 2.0, H];
 
+if isfield(log, 'replanned') && numel(log.replanned) == N
+    evalSteps = find(log.replanned(:)).';
+else
+    evalSteps = 1:N;
+end
+if isfield(log, 'planStamp') && numel(log.planStamp) == N
+    stamp = log.planStamp(:);
+else
+    stamp = t;
+end
+
 sqErr  = cell(1, numel(horizons));
 allErr = [];
 for h = 1:numel(horizons)
     sqErr{h} = [];
 end
 
-for i = 1:N
+for i = evalSteps
     preds = log.preds{i};
     if isempty(preds)
         continue;
     end
-
     for h = 1:numel(horizons)
-        hz     = horizons(h);
-        tFuture = t(i) + hz;
-
-        % Nearest logged step to the future time.
+        hz      = horizons(h);
+        tFuture = stamp(i) + hz;
         [dtBest, iFuture] = min(abs(t - tFuture));
         if dtBest > cfg.sim.dt * 2
             continue;                      % no logged truth close enough
         end
-
         truth = log.obstacles{iFuture};
         if isempty(truth)
             continue;
         end
         truthIds = [truth.id];
-
         for p = 1:numel(preds)
             pr = preds(p);
-            k  = find(truthIds == pr.id, 1);
+            if isfield(pr, 'truthId') && ~isempty(pr.truthId)
+                tid = pr.truthId;
+            else
+                tid = pr.id;               % legacy logs: ground truth fed directly
+            end
+            if isnan(tid)
+                continue;                  % false-positive track: nothing to compare
+            end
+            k = find(truthIds == tid, 1);
             if isempty(k)
                 continue;                  % road user gone: not measurable
             end
-
             tp = pr.times(:);
             if hz < tp(1) || hz > tp(end)
                 continue;
             end
             px = interp1(tp, pr.pos(:,1), hz, 'linear');
             py = interp1(tp, pr.pos(:,2), hz, 'linear');
-
             e2 = (px - truth(k).pos(1))^2 + (py - truth(k).pos(2))^2;
             sqErr{h}(end+1) = e2; %#ok<AGROW>
             allErr(end+1)   = e2; %#ok<AGROW>

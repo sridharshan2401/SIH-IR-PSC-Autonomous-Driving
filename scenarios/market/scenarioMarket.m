@@ -68,15 +68,17 @@ end
 
 % Stationary bicycle leaning into the road.
 jb = find(sVals >= 40, 1);
-extras(end+1) = struct('center', centerline(jb,:) + [0, 0.9], 'radius', 0.5, ...
+% Phase 2: moved from 0.9 m to 1.3 m off the centreline. Together with the
+% neighbouring stall it previously left a 1.9 m gap, narrower than the car
+% itself, so the market could never be completed.
+extras(end+1) = struct('center', centerline(jb,:) + [0, 1.3], 'radius', 0.45, ...
                        'halfSize', [], 'yaw', []);
 
 grid = buildRoadGrid(centerline, halfWidth, res, extras);
 
 % --- Actors --------------------------------------------------------------
 % Pushcart moving slowly along the street: a moving roadblock.
-actors = makeActor(1, 'pushcart', ...
-                   [centerline(10,:) + [0 0.4]; centerline(end,:) + [0 0.4]], ...
+actors = makeActor(1, 'pushcart', roadPath(centerline, 13.5, 80, 0.4), ...
                    1.4, 'StartTime', 0);
 
 % Pedestrians crossing at staggered, unpredictable moments.
@@ -94,16 +96,12 @@ for k = 1:numel(crossAt)
 end
 
 % Motorcycle weaving through: high agility, hard to predict.
-weave = [centerline(6,:)  + [0 -0.8];
-         centerline(20,:) + [0  1.0];
-         centerline(34,:) + [0 -0.9];
-         centerline(48,:) + [0  0.9];
-         centerline(end,:)+ [0 -0.5]];
+sW = (7.5:1.5:80).';
+weave = frenetToCartesian(centerline, sW, 0.45 * sin((sW - 7.5) / 21 * pi));
 actors(end+1) = makeActor(2, 'motorcycle', weave, 5.5, 'StartTime', 1.0);
 
 % Oncoming auto-rickshaw: the street is barely wide enough for both.
-actors(end+1) = makeActor(3, 'autorickshaw', ...
-                          [centerline(end,:) + [0 -0.6]; centerline(1,:) + [0 -0.6]], ...
+actors(end+1) = makeActor(3, 'autorickshaw', roadPath(centerline, 80, 0, -0.25), ...
                           3.2, 'StartTime', 4.0);
 
 % A cow standing at the roadside, occasionally a hazard.
@@ -124,6 +122,10 @@ scn.egoStart    = struct('pos', centerline(2,:), ...
 scn.goal        = centerline(end-2,:);
 scn.goalRadius  = 4.0;
 scn.actors      = actors;
+scn.roadHalfWidth = halfWidth;
+scn.extras      = extras;
+scn.extraTypes  = [repmat({'stall'}, 1, numel(extras) - 1), {'pole'}];
+scn.environment = 'urban';
 scn.duration    = 60.0;
 scn.sihScenario = 'D: Dense market area with mixed traffic';
 scn.description = ['Narrow winding market street, usable width down to ' ...

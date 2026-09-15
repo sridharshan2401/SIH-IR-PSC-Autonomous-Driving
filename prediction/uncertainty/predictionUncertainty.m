@@ -76,7 +76,11 @@ sigmaLat    = sqrt(base + (lateralRate * t).^2);
 % Heading uncertainty smears position sideways in proportion to distance
 % travelled: an error of dtheta at distance L displaces by roughly L*dtheta.
 travelled = max(obs.speed, 0) * t;
-sigmaLat  = sqrt(sigmaLat.^2 + (travelled * pc.headingStd).^2);
+hStd = pc.headingStd;
+if isfield(pc, 'headingStdClass') && isfield(pc.headingStdClass, obs.class)
+    hStd = pc.headingStdClass.(obs.class);
+end
+sigmaLat  = sqrt(sigmaLat.^2 + (travelled * hStd).^2);
 
 % Weak evidence inflates uncertainty.
 confFactor = 1 + 1.5 * (1 - max(min(obs.confidence, 1), 0));

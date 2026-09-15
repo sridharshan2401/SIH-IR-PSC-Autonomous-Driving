@@ -20,7 +20,7 @@ function th = pathHeading(P)
 %
 %   See also PATHCURVATURE, WRAPToPi.
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'finite','real'}, mfilename, 'P');
+requireInput(isnumeric(P) && size(P,2) == 2 && all(isfinite(P(:))), 'pathHeading', 'P must be a finite Nx2');
 N = size(P,1);
 if N < 2
     error('pathHeading:tooShort', 'Need at least 2 points, got %d.', N);

@@ -80,7 +80,15 @@ cfg.prediction.dt          = 0.20;  % s, prediction time step
 cfg.prediction.posNoiseStd = 0.30;  % m, initial position std dev
 cfg.prediction.velNoiseStd = 0.40;  % m/s, initial velocity std dev
 cfg.prediction.accelStd    = 1.20;  % m/s^2, process noise (drives growth)
-cfg.prediction.headingStd  = 0.15;  % rad, initial heading std dev
+cfg.prediction.headingStd  = 0.15;  % rad, heading std dev for classes not listed below
+% Heading uncertainty per class (Phase 2). Vehicles follow the road, so a
+% sustained 0.15 rad heading error over 3 s (2.7 m of lateral sigma for a
+% car at 9 m/s) made every oncoming car look like a certain collision.
+% People and animals change direction freely. Engineering judgement.
+cfg.prediction.headingStdClass = struct( ...
+    'car', 0.04, 'bus', 0.03, 'truck', 0.03, 'motorcycle', 0.08, ...
+    'bicycle', 0.08, 'autorickshaw', 0.06, 'pedestrian', 0.25, ...
+    'pushcart', 0.10, 'animal', 0.30, 'unknown', 0.15);
 cfg.prediction.maxSigma    = 6.0;   % m, cap on predicted std dev
 
 % Irregular-motion allowance: EXTRA lateral uncertainty per class, expressed
@@ -107,7 +115,7 @@ cfg.risk.nSigmaOccupancy = 2.0;   % occupancy footprint = mean + n*sigma
 cfg.risk.ttcCritical     = 1.5;   % s, below this TTC counts as critical
 cfg.risk.ttcWarning      = 3.5;   % s, below this TTC counts as a warning
 cfg.risk.riskFloor       = 1e-4;  % ignore risk contributions below this
-cfg.risk.gridOffsetStep  = 0.25;  % m, lateral resolution of the risk grid
+cfg.risk.gridOffsetStep  = 0.15;  % m, lateral resolution of the risk grid (finer => less smoothing needed)
 cfg.risk.ttcSigmaFactor  = 0.5;   % std devs of predicted uncertainty added to TTC footprint
 cfg.risk.speedReduction  = 0.75;  % fraction of target speed removed at risk = 1
 cfg.risk.beyondHorizonWeight = 0.3; % weight of risk at stations reached after the horizon
@@ -144,6 +152,13 @@ cfg.deform.wSmooth   = 2.5;   % lateral change between stations
 cfg.deform.wAnchor   = 4.0;   % first station stays at the vehicle
 cfg.deform.wTemporal = 1.5;   % agreement with the previous plan
 cfg.deform.wPothole  = 1.0;   % multiplier on pothole traversal cost
+cfg.deform.wStatic   = 20.0;  % static clearance below the preferred side clearance
+cfg.deform.smoothRefSpeed = 4.0; % m/s; above this wSmooth grows with (v/ref)^2
+% Traffic-side preference (an OPTIONAL cue, like a lane marking): on a
+% two-way road India keeps LEFT, so the preferred lateral position is this
+% far left of the drivable-corridor centre, clipped to the corridor. 0 =
+% plan on the centre of free space (single-track / one-way roads).
+cfg.deform.preferredOffset = 0.0;  % m, positive = left
 
 % ---------------------------------------------------------------------
 % Safety thresholds
@@ -163,7 +178,7 @@ cfg.safety.emergencyMargin     = 1.0;   % factor on maxDecel above which braking
 % Trajectory generation and smoothing
 % ---------------------------------------------------------------------
 cfg.traj.numPoints        = 41;    % samples in the output trajectory
-cfg.traj.smoothWindow     = 5;     % moving-average half-window (samples)
+cfg.traj.smoothWindow     = 3;     % moving-average half-window (samples)
 cfg.traj.smoothPasses     = 2;     % repeated smoothing passes
 cfg.traj.minSpeed         = 0.0;   % m/s
 cfg.traj.speedComfortJerk = 1.5;   % m/s^3 (legacy field, see profileJerk)
@@ -171,13 +186,15 @@ cfg.traj.speedComfortJerk = 1.5;   % m/s^3 (legacy field, see profileJerk)
 % by integrating a jerk-limited longitudinal model in time, so the planned
 % speeds respect maxAccel, maxDecel AND maxJerk by construction instead of
 % being rejected afterwards by checkFeasibility.
-cfg.traj.profileJerk      = 2.5;   % m/s^3, jerk used to shape the profile (< ego.maxJerk)
+cfg.traj.profileJerk      = 2.0;   % m/s^3, jerk used to shape the profile (< ego.maxJerk: sampling margin)
 cfg.traj.profileDecel     = 3.0;   % m/s^2, planned braking (< ego.maxDecel)
 cfg.traj.profileGain      = 1.2;   % 1/s, speed-tracking gain of the generator
 cfg.traj.profileDt        = 0.05;  % s, generator integration step
 cfg.traj.profileMaxTime   = 30.0;  % s, generator time cap
 cfg.traj.ceilingWindow    = 4;     % stations, erosion/averaging window of the speed ceiling
 cfg.traj.profileLimitMargin = 0.97; % profile uses 97 % of accel/decel limits (sampling margin)
+cfg.traj.latAccelMargin   = 0.90;  % profile plans to 90 % of maxLatAccel (tracking margin)
+cfg.traj.feasibilityRetrySpeed = 0.6; % x maxSpeed: retry speed cap when a plan is infeasible
 
 % ---------------------------------------------------------------------
 % Scoring weights (scoreTrajectory.m) and confidence weights
@@ -221,12 +238,13 @@ cfg.tracking.initVelVar    = 25;    % (m/s)^2 initial velocity variance
 % there is genuinely no way around.
 cfg.pothole.depthModerate  = 0.05;   % m, depth at or above -> moderate
 cfg.pothole.depthSevere    = 0.10;   % m, depth at or above -> severe
-cfg.pothole.cost    = struct('minor', 0.6, 'moderate', 3.0, 'severe', 12.0);
+cfg.pothole.cost    = struct('minor', 0.6, 'moderate', 6.0, 'severe', 20.0);
 cfg.pothole.speed   = struct('minor', 8.0, 'moderate', 4.0, 'severe', 2.0); % m/s over it
 cfg.pothole.risk    = struct('minor', 0.20, 'moderate', 0.50, 'severe', 0.85);
 cfg.pothole.wheelTrack     = 1.45;   % m, lateral distance between wheel centres
 cfg.pothole.tyreWidth      = 0.20;   % m
 cfg.pothole.slowdownLead   = 4.0;    % m, speed cap starts this far before the pothole
+cfg.pothole.lateralMargin  = 0.20;   % m, extra tyre clearance when planning to avoid (tracking error)
 cfg.pothole.confirmHits    = 3;      % detections before a pothole is confirmed
 cfg.pothole.gate           = 1.5;    % m, association gate for pothole landmarks
 cfg.pothole.maxMisses      = 1e9;    % potholes are static: never deleted once confirmed
@@ -257,6 +275,7 @@ cfg.control.kpSpeed       = 1.2;
 cfg.control.kiSpeed       = 0.15;
 cfg.control.iMax          = 2.0;   % integrator clamp
 cfg.control.speedPreview  = 0.3;   % s, speed-profile preview for feed-forward
+cfg.control.minPreviewDist = 1.0;  % m, minimum preview (pull-away from rest)
 
 % ---------------------------------------------------------------------
 % Simulation timing
@@ -285,7 +304,7 @@ switch profile
         cfg.ego.maxSpeed            = 11.1;  % ~40 km/h
         cfg.corridor.maxRayLength   = 8.0;   % narrow road, boundaries close
         cfg.corridor.minWidth       = 2.8;
-        cfg.deform.maxLateralShift  = 1.5;   % little room to move sideways
+        cfg.deform.maxLateralShift  = 2.0;   % corridor bounds limit it further on narrow stretches
         cfg.safety.lateralClearance = 0.60;
     case 'highway'
         cfg.ego.maxSpeed           = 22.2;   % ~80 km/h
@@ -312,7 +331,8 @@ switch profile
         cfg.corridor.lookaheadDist  = 45.0;
         cfg.corridor.maxRayLength   = 9.0;
         cfg.prediction.horizon      = 3.5;
-        cfg.deform.maxLateralShift  = 2.5;
+        cfg.deform.maxLateralShift  = 2.8;
+        cfg.deform.preferredOffset  = 0.9;   % two-way road: keep left
         cfg.sim.maxTime             = 90.0;
     otherwise
         error('irpscConfig:unknownProfile', ...

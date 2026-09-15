@@ -83,7 +83,9 @@ function testDeformationIsSmooth(tc)
 % The smoothness term must prevent the profile jumping between extremes on
 % adjacent stations.
 N = 30;  offsets = -2:0.25:2;
-R = rand(N, numel(offsets)) * 0.3;
+% Phase 2: deterministic pseudo-random risk. The original used rand without
+% a seed, so the test could pass or fail from run to run.
+R = mod((1:N).' * (1:numel(offsets)) * 7919, 97) / 97 * 0.3;
 cfg = irpscConfig();
 
 d = deformTrajectory(R, offsets, cfg, 0, []);
@@ -144,7 +146,9 @@ for v0 = [0 6 11]
                   'curvature', zeros(41,1), 'speed', v, 's', s, 'times', t, ...
                   'valid', true);
     [ok, d] = checkFeasibility(traj, cfg, vp);
-    verifyTrue(tc, ok, sprintf('v0=%g: %s (jerk %.2f)', v0, strjoin(d.violations, ','), d.maxJerk));
+    verifyTrue(tc, ok, sprintf('v0=%g: %s', v0, strjoin(d.violations, ',')));
+    verifyEmpty(tc, d.comfortViolations, sprintf('v0=%g: jerk %.2f', v0, d.maxJerk));
+    verifyLessThanOrEqual(tc, d.maxJerk, cfg.ego.maxJerk + 1e-2);
 end
 end
 

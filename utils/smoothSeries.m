@@ -21,9 +21,9 @@ function y = smoothSeries(x, halfWin, passes)
 
 if nargin < 3 || isempty(passes), passes = 1; end
 
-validateattributes(x, {'numeric'}, {'vector','finite','real'}, mfilename, 'x');
-validateattributes(halfWin, {'numeric'}, {'scalar','integer','nonnegative'}, ...
-                   mfilename, 'halfWin');
+requireInput(isnumeric(x) && isvector(x) && all(isfinite(x)), 'smoothSeries', 'x must be a finite vector');
+requireInput(isscalar(halfWin) && halfWin >= 0 && halfWin == round(halfWin), ...
+             'smoothSeries', 'halfWin must be a non-negative integer');
 
 wasRow = isrow(x);
 y = x(:);
@@ -33,14 +33,13 @@ if halfWin == 0 || N < 3
     return;
 end
 
+lo = max((1:N).' - halfWin, 1);
+hi = min((1:N).' + halfWin, N);
+cnt = hi - lo + 1;
 for p = 1:passes
-    s = y;
-    for i = 1:N
-        lo = max(1, i - halfWin);
-        hi = min(N, i + halfWin);
-        s(i) = mean(y(lo:hi));
-    end
-    y = s;
+    % Shrinking-window moving average via cumulative sums (Phase 2, speed).
+    C = [0; cumsum(y)];
+    y = (C(hi+1) - C(lo)) ./ cnt;
 end
 
 if wasRow, y = y.'; end

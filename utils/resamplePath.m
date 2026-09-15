@@ -28,9 +28,9 @@ function [Q, sq] = resamplePath(P, n)
 %
 %   See also PATHARCLENGTH, SMOOTHPATH.
 
-validateattributes(P, {'numeric'}, {'2d','ncols',2,'nonempty','finite','real'}, ...
-                   mfilename, 'P');
-validateattributes(n, {'numeric'}, {'scalar','integer','positive'}, mfilename, 'n');
+requireInput(isnumeric(P) && size(P,2) == 2 && ~isempty(P) && all(isfinite(P(:))), ...
+             'resamplePath', 'P must be a non-empty finite Nx2');
+requireInput(isscalar(n) && n >= 1 && n == round(n), 'resamplePath', 'n must be a positive integer');
 
 if size(P,1) == 1
     Q  = repmat(P, n, 1);

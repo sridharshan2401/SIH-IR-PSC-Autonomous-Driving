@@ -37,10 +37,10 @@ function [dist, hitPt] = rayCastGrid(grid, origin, heading, maxRange, step)
 %
 %   See also ISOCCUPIEDAT, EXTRACTCORRIDOR.
 
-validateattributes(origin, {'numeric'}, {'vector','numel',2,'finite','real'}, mfilename, 'origin');
-validateattributes(heading, {'numeric'}, {'scalar','finite','real'}, mfilename, 'heading');
-validateattributes(maxRange, {'numeric'}, {'scalar','positive','finite'}, mfilename, 'maxRange');
-validateattributes(step, {'numeric'}, {'scalar','positive','finite'}, mfilename, 'step');
+requireInput(numel(origin) == 2 && all(isfinite(origin)), 'rayCastGrid', 'origin must be a finite 1x2');
+requireInput(isscalar(heading) && isfinite(heading), 'rayCastGrid', 'heading must be a finite scalar');
+requireInput(isscalar(maxRange) && maxRange > 0 && isfinite(maxRange), 'rayCastGrid', 'maxRange must be positive');
+requireInput(isscalar(step) && step > 0 && isfinite(step), 'rayCastGrid', 'step must be positive');
 
 origin = origin(:).';
 dirVec = [cos(heading), sin(heading)];

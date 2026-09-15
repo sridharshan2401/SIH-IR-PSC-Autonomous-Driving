@@ -19,6 +19,7 @@ out = struct();
 out.isSafeStop          = false;
 out.status              = 'ok';
 out.traj                = [];
+out.rejectedTraj        = [];       % candidate rejected by clearance/feasibility, if any
 out.corridor            = [];
 out.preds               = [];
 out.confidence          = 1;

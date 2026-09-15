@@ -57,7 +57,12 @@ extras = struct('center', {}, 'radius', {}, 'halfSize', {}, 'yaw', {});
 
 % Parked truck, partly in the road at the pinch point.
 idx = find(sVals >= 56, 1);
-truckPos = centerline(idx,:) + [0, 1.5];
+% Phase 2: the truck stood 1.5 m left of the centreline, leaving 2.3 m of
+% free width -- less than the 1.68 m car plus the project's own 0.25 m
+% minimum clearance on each side, discretised on a 0.2 m grid. The scenario
+% was therefore impassable by construction. It now leaves ~2.8 m: still a
+% NARROW squeeze the vehicle must take slowly, but physically passable.
+truckPos = centerline(idx,:) + [0, 2.1];
 extras(end+1) = struct('center', truckPos, 'radius', [], ...
                        'halfSize', [4.0, 1.2], 'yaw', 0.05);
 
@@ -74,20 +79,20 @@ end
 grid = buildRoadGrid(centerline, halfWidth, res, extras);
 
 % --- Actors --------------------------------------------------------------
-actors = makeActor(1, 'motorcycle', ...
-                   [centerline(end,:) + [0 -1.2]; centerline(1,:) + [0 -0.8]], ...
+% Phase 2: actors follow the curved road (ROADPATH). The original straight
+% two-point paths left the road by up to 5 m.
+actors = makeActor(1, 'motorcycle', roadPath(centerline, 120, 0, -1.0), ...
                    7.0, 'StartTime', 0);
 
 % A bicycle travelling the same way as the ego, slowly.
-actors(end+1) = makeActor(2, 'bicycle', ...
-                          [centerline(12,:) + [0 1.0]; centerline(end,:) + [0 1.0]], ...
-                          3.5, 'StartTime', 0);
+actors(end+1) = makeActor(2, 'bicycle', roadPath(centerline, 22, 120, 0.4), ...
+                          3.5, 'StartTime', 0, 'StopAtEnd', false);
 
 % A pedestrian walking along the edge who steps further in partway through.
-pedStart = centerline(30,:) + [0, 2.2];
-pedEnd   = centerline(45,:) + [0, 0.6];
-actors(end+1) = makeActor(3, 'pedestrian', [pedStart; pedEnd], 1.1, ...
-                          'StartTime', 3.0);
+sPed = linspace(58, 88, 16).';
+dPed = linspace(2.2, 0.6, 16).';
+pedWp = frenetToCartesian(centerline, sPed, dPed);
+actors(end+1) = makeActor(3, 'pedestrian', pedWp, 1.1, 'StartTime', 3.0);
 
 % --- Assemble ------------------------------------------------------------
 scn.name        = 'village';
@@ -102,6 +107,13 @@ scn.goal        = centerline(end-2,:);
 scn.goalRadius  = 5.0;
 scn.actors      = actors;
 scn.duration    = 45.0;
+scn.roadHalfWidth = halfWidth;
+scn.extras      = extras;
+scn.extraTypes  = [{'truck'}, repmat({'debris'}, 1, numel(extras) - 1)];
+scn.markings    = struct('sFrom', 0, 'sTo', 0);        % none: unmarked road
+% Village roads have potholes; the planner must see them via perception.
+scn.potholes    = makePothole(1, frenetToCartesian(centerline, 30, -0.4), 1.2, 1.4, 0.07);
+scn.potholes(end+1) = makePothole(2, frenetToCartesian(centerline, 90, 0.5), 0.6, 0.5, 0.03);
 scn.sihScenario = 'A: Unmarked village road';
 scn.description = ['Unmarked rural road, irregular width 3.8-5.6 m, ' ...
                    'curving, with a parked truck at a pinch point, ' ...
